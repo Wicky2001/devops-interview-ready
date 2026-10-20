@@ -1,0 +1,671 @@
+{
+  "day": 25,
+  "week": 4,
+  "title": "Project: health checks and alerts",
+  "goal": "Build a health-check tool: HTTP checks with timeouts and retries, disk and memory thresholds, clear exit codes, a log file, and alerts that do not spam.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day25 && cd ~/bash-practice/day25",
+    "# a fake API for the checks (python3, only on 127.0.0.1)",
+    "cat > fake-api.py <<'EOF'",
+    "import http.server, json, os, sys, time",
+    "PORT = int(sys.argv[1])",
+    "STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"flaky-%d.count\" % PORT)",
+    "class Handler(http.server.BaseHTTPRequestHandler):",
+    "    def log_message(self, *args):",
+    "        pass",
+    "    def reply(self, code, body):",
+    "        data = json.dumps(body).encode()",
+    "        self.send_response(code)",
+    "        self.send_header(\"Content-Type\", \"application/json\")",
+    "        self.send_header(\"Content-Length\", str(len(data)))",
+    "        self.end_headers()",
+    "        self.wfile.write(data)",
+    "    def do_GET(self):",
+    "        if self.path == \"/health\":",
+    "            self.reply(200, {\"status\": \"UP\"})",
+    "        elif self.path == \"/health-db-down\":",
+    "            self.reply(503, {\"status\": \"DOWN\", \"db\": \"unreachable\"})",
+    "        elif self.path == \"/slow\":",
+    "            time.sleep(5)",
+    "            self.reply(200, {\"status\": \"UP\"})",
+    "        elif self.path == \"/flaky\":",
+    "            n = int(open(STATE).read()) if os.path.exists(STATE) else 0",
+    "            open(STATE, \"w\").write(str(n + 1))",
+    "            self.reply(200 if n >= 2 else 500, {\"try\": n + 1})",
+    "        else:",
+    "            self.reply(404, {\"error\": \"not found\"})",
+    "http.server.ThreadingHTTPServer((\"127.0.0.1\", PORT), Handler).serve_forever()",
+    "EOF",
+    "# snapshots for the disk and memory checks",
+    "printf '%s\\n' 'MemTotal:       16000000 kB' 'MemFree:          310000 kB' 'MemAvailable:     900000 kB' > meminfo-low.txt",
+    "printf '%s\\n' 'MemTotal:       16000000 kB' 'MemFree:         2000000 kB' 'MemAvailable:    9800000 kB' > meminfo-ok.txt",
+    "printf '%s\\n' 'Filesystem     1024-blocks      Used Available Capacity Mounted on' '/dev/nvme0n1p1    51474912  47105112   4353416      92% /' '/dev/nvme1n1     103081248  41232499  56589645      43% /var' > df-p.txt",
+    "# P4: a broken health-check script",
+    "printf '%s\\n' '#!/bin/bash' '# Runs every 5 minutes from cron. Appends ONE line per run to health.log.' '# Exit 0 if healthy, exit 2 if not (Nagios style). Must never wait longer than 3 seconds.' 'URL=${1:-http://127.0.0.1:8124/health}' 'if curl -s $URL > /dev/null; then' '  echo \"$(date +%T) OK $URL\" > health.log' 'else' '  echo \"$(date +%T) DOWN $URL\" > health.log' 'fi' > check-api.sh",
+    "cd ~/bash-practice/day25"
+  ],
+  "warmup": [
+    {
+      "q": "Which curl options make a check fail on HTTP 500 and not hang?",
+      "a": "`curl -fsS --max-time 5 URL` (`-f` fail on HTTP errors, `--max-time` limit).",
+      "from_day": 18
+    },
+    {
+      "q": "How do you keep only the last 7 backups by name?",
+      "a": "`ls -1 backup-*.tgz | sort | head -n -7 | xargs -r rm --`",
+      "from_day": 24
+    },
+    {
+      "q": "How do you read `df` output in a script reliably?",
+      "a": "Use `df -P` (POSIX format), skip the header, and strip the `%`.",
+      "from_day": 17
+    },
+    {
+      "q": "Which column of `/proc/meminfo` matters for free memory?",
+      "a": "`MemAvailable` (like `available` in `free -m`).",
+      "from_day": 17
+    }
+  ],
+  "problems": [
+    {
+      "id": "d25p01",
+      "title": "An HTTP check with timeout and retries",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The monitoring script calls the to-do API's `/health` endpoint. One slow or failed answer should not wake up the on-call engineer at night: the check retries a few times with a pause, and each try has a timeout.",
+      "task": [
+        "Start the fake API: `python3 fake-api.py 8121 &`.",
+        "Write `check_url URL [tries] [delay]`: curl with `--max-time 2`, get the status code, accept only 2xx.",
+        "Print `OK` with the try number, or a `WARN` line per failed try (stderr), then `FAIL` and return 1.",
+        "Test `/health`, `/flaky` (fails twice, then works), `/health-db-down` (503), and `/slow` (too slow)."
+      ],
+      "hints": [
+        "`code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \"$url\") || code=000`",
+        "`[[ $code == 2* ]]` = any 2xx code.",
+        "A C-style loop: `for ((i = 1; i <= tries; i++))`."
+      ],
+      "solution": [
+        "python3 fake-api.py 8121 &",
+        "SRV=$!",
+        "sleep 1",
+        "check_url() {      # usage: check_url URL [tries] [delay-seconds]",
+        "  local url=$1 tries=${2:-3} delay=${3:-1} i code",
+        "  for ((i = 1; i <= tries; i++)); do",
+        "    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \"$url\") || code=000",
+        "    if [[ $code == 2* ]]; then echo \"OK   $url ($code, try $i)\"; return 0; fi",
+        "    echo \"WARN $url answered $code (try $i/$tries)\" >&2",
+        "    sleep \"$delay\"",
+        "  done",
+        "  echo \"FAIL $url after $tries tries\" >&2",
+        "  return 1",
+        "}",
+        "check_url http://127.0.0.1:8121/health",
+        "check_url http://127.0.0.1:8121/flaky 5 0.2",
+        "check_url http://127.0.0.1:8121/health-db-down 2 0.2; echo \"exit code: $?\"",
+        "check_url http://127.0.0.1:8121/slow 1; echo \"exit code: $?\"",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "-w '%{http_code}'",
+          "meaning": "Print only the status code (Day 18)."
+        },
+        {
+          "part": "--max-time 2",
+          "meaning": "Give up after 2 seconds. A slow API counts as a failure."
+        },
+        {
+          "part": "|| code=000",
+          "meaning": "When curl itself fails (timeout, refused), use `000`."
+        },
+        {
+          "part": "[[ $code == 2* ]]",
+          "meaning": "Pattern: any code that starts with 2 (Day 6)."
+        },
+        {
+          "part": "retries + sleep",
+          "meaning": "Avoid false alarms from one short glitch."
+        },
+        {
+          "part": "return 0 / 1",
+          "meaning": "The function answers yes/no; the caller decides what to do (Day 9)."
+        }
+      ],
+      "expected_output": "OK   http://127.0.0.1:8121/health (200, try 1)\nWARN http://127.0.0.1:8121/flaky answered 500 (try 1/5)\nWARN http://127.0.0.1:8121/flaky answered 500 (try 2/5)\nOK   http://127.0.0.1:8121/flaky (200, try 3)\nWARN http://127.0.0.1:8121/health-db-down answered 503 (try 1/2)\nWARN http://127.0.0.1:8121/health-db-down answered 503 (try 2/2)\nFAIL http://127.0.0.1:8121/health-db-down after 2 tries\nexit code: 1\nWARN http://127.0.0.1:8121/slow answered 000 (try 1/1)\nFAIL http://127.0.0.1:8121/slow after 1 tries\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Retrying without a pause: 3 tries in 10 ms are the same as 1 try.",
+        "Too many retries with long pauses: the check takes minutes and overlaps the next cron run. Keep total time below the schedule interval."
+      ],
+      "interview_say": "My HTTP check uses `curl` with a timeout and the status code, accepts only 2xx, retries a few times with a short pause, and returns 1 only after all tries fail, so one glitch does not page anyone.",
+      "try_yourself": "Also check the JSON body: `curl -s URL | grep -q '\"status\": \"UP\"'`. Why can a 200 answer still mean \"not healthy\"?"
+    },
+    {
+      "id": "d25p02",
+      "title": "Disk and memory thresholds you can test",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The same tool must warn when a disk is above 90% or available memory is below 10%. To test the alert without filling a real disk, the functions read from files: `df -P` output on stdin, and a meminfo path in a variable that defaults to `/proc/meminfo`.",
+      "task": [
+        "Write `check_disk LIMIT` that reads `df -P` lines from stdin and prints `ALERT disk MOUNT at N%` (return 1 if any).",
+        "Write `check_mem MIN_PCT` that reads `${MEMINFO:-/proc/meminfo}` and computes MemAvailable / MemTotal.",
+        "Test with `df-p.txt`, `meminfo-low.txt` and `meminfo-ok.txt`.",
+        "Run `check_mem 10` once on your real machine too."
+      ],
+      "hints": [
+        "Reuse the df parsing from Day 17: skip the header, strip `%`.",
+        "`awk '/^MemTotal/ {t=$2} /^MemAvailable/ {a=$2} END {printf \"%d\", a * 100 / t}' \"$file\"`",
+        "`MEMINFO=meminfo-low.txt check_mem 10` sets the variable for one call only (Day 5)."
+      ],
+      "solution": [
+        "check_disk() {          # usage: df -P | check_disk LIMIT",
+        "  local limit=${1:-90} bad=0 fs size used avail pct mount",
+        "  while read -r fs size used avail pct mount; do",
+        "    pct=${pct%\\%}",
+        "    [[ $pct =~ ^[0-9]+$ ]] || continue",
+        "    if (( pct >= limit )); then echo \"ALERT disk $mount at $pct% (limit $limit%)\"; bad=1; fi",
+        "  done",
+        "  return $bad",
+        "}",
+        "check_mem() {           # usage: check_mem MIN_AVAILABLE_PCT",
+        "  local min=${1:-10} file=${MEMINFO:-/proc/meminfo} pct",
+        "  pct=$(awk '/^MemTotal:/ {t = $2} /^MemAvailable:/ {a = $2} END {printf \"%d\", a * 100 / t}' \"$file\")",
+        "  if (( pct < min )); then echo \"ALERT memory available ${pct}% (minimum $min%)\"; return 1; fi",
+        "  echo \"OK   memory available ${pct}%\"",
+        "}",
+        "check_disk 90 < df-p.txt; echo \"disk check exit code: $?\"",
+        "MEMINFO=meminfo-low.txt check_mem 10; echo \"low memory exit code: $?\"",
+        "MEMINFO=meminfo-ok.txt check_mem 10; echo \"ok memory exit code: $?\"",
+        "check_mem 10 > /dev/null && echo \"this machine: memory OK\" || echo \"this machine: memory LOW\""
+      ],
+      "explanation": [
+        {
+          "part": "reads stdin",
+          "meaning": "`df -P | check_disk 90` in production, `< df-p.txt` in tests. Same code."
+        },
+        {
+          "part": "${MEMINFO:-/proc/meminfo}",
+          "meaning": "A default path that tests can change: easy testing without fake hardware."
+        },
+        {
+          "part": "MemAvailable * 100 / MemTotal",
+          "meaning": "Percent of RAM that new programs can still get."
+        },
+        {
+          "part": "return $bad",
+          "meaning": "0 = fine, 1 = at least one alert."
+        },
+        {
+          "part": "(( pct >= limit ))",
+          "meaning": "Integer comparison with normal operators (Day 6)."
+        }
+      ],
+      "expected_output": "ALERT disk / at 92% (limit 90%)\ndisk check exit code: 1\nALERT memory available 5% (minimum 10%)\nlow memory exit code: 1\nOK   memory available 61%\nok memory exit code: 0\nthis machine: memory OK",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The last line depends on the user's machine (it is almost always OK on a laptop). The other lines are fixed.",
+      "verified": true,
+      "mistakes": [
+        "Alerting on `MemFree`: Linux keeps little memory free on purpose (cache), so the alert fires falsely every hour.",
+        "Testing alerts only in production. A threshold bug is found when the disk is already full."
+      ],
+      "interview_say": "My disk and memory checks read `df -P` and `/proc/meminfo`, compare with thresholds and return non-zero on alert. I make them read from stdin or a configurable path, so I can test the alert logic with saved files.",
+      "try_yourself": "Add an inode check: `df -Pi | check_disk 90`. Does the same function work?"
+    },
+    {
+      "id": "d25p03",
+      "title": "Log every run, alert only on change",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The first version sent a Slack message every 5 minutes while the API was down: 100 messages in one night, so people muted the channel. Better: log every run, but alert only when the state changes (OK → DOWN, DOWN → OK). The last state is kept in a small state file.",
+      "task": [
+        "Write `record STATE` that appends `time STATE` to `health.log`.",
+        "Keep the last state in `health.state`. If the new state is different, print `ALERT: STATE (was OLD)`.",
+        "Simulate 5 runs with states OK, DOWN, DOWN, DOWN, OK.",
+        "Show `health.log` and count the alerts."
+      ],
+      "hints": [
+        "`OLD=$(cat health.state 2>/dev/null || echo OK)`",
+        "Compare, then save: `echo \"$NEW\" > health.state`.",
+        "For tests, the time comes from `FAKE_NOW`: `date -d \"${FAKE_NOW:-now}\" '+%F %T'`."
+      ],
+      "solution": [
+        "record() {",
+        "  local new=$1 old now",
+        "  now=$(date -d \"${FAKE_NOW:-now}\" '+%F %T')",
+        "  old=$(cat health.state 2>/dev/null || echo OK)",
+        "  echo \"$now $new\" >> health.log",
+        "  if [ \"$new\" != \"$old\" ]; then echo \"$now ALERT: $new (was $old)\"; fi",
+        "  echo \"$new\" > health.state",
+        "}",
+        "minute=0",
+        "for state in OK DOWN DOWN DOWN OK; do",
+        "  FAKE_NOW=\"2026-10-20 02:$(printf '%02d' $minute)\" record \"$state\"",
+        "  minute=$((minute + 5))",
+        "done | tee alerts.txt",
+        "echo \"=== health.log ===\"",
+        "cat health.log",
+        "echo \"alerts sent: $(wc -l < alerts.txt) (instead of 3 DOWN messages + 1 OK)\""
+      ],
+      "explanation": [
+        {
+          "part": ">> health.log",
+          "meaning": "Append: one line per run, the full history."
+        },
+        {
+          "part": "health.state",
+          "meaning": "Remember the last state between cron runs."
+        },
+        {
+          "part": "alert on change only",
+          "meaning": "One message when it breaks, one when it recovers. No spam."
+        },
+        {
+          "part": "FAKE_NOW",
+          "meaning": "Tests can set the time; in production it is empty and `date -d now` is used."
+        },
+        {
+          "part": "done | tee alerts.txt",
+          "meaning": "Show the alerts and save them (Day 4)."
+        }
+      ],
+      "expected_output": "2026-10-20 02:05:00 ALERT: DOWN (was OK)\n2026-10-20 02:20:00 ALERT: OK (was DOWN)\n=== health.log ===\n2026-10-20 02:00:00 OK\n2026-10-20 02:05:00 DOWN\n2026-10-20 02:10:00 DOWN\n2026-10-20 02:15:00 DOWN\n2026-10-20 02:20:00 OK\nalerts sent: 2 (instead of 3 DOWN messages + 1 OK)",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Storing the state file in `/tmp`: after a reboot it is gone, and the first run may send a wrong \"recovered\" alert. Use `/var/lib/yourtool/`.",
+        "Alerting on the first failure only, with no recovery message: the team never knows when it is fixed."
+      ],
+      "interview_say": "To avoid alert fatigue I log every check, but send an alert only when the state changes, keeping the last state in a file. Real monitoring tools like Prometheus Alertmanager do the same with grouping and silences.",
+      "try_yourself": "Add a reminder: if the state is still DOWN after 6 runs (30 minutes), send one more alert."
+    },
+    {
+      "id": "d25p04",
+      "title": "Find the bug: the cron health check",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`check-api.sh` runs every 5 minutes. Last night the API returned 503 for an hour, but the script logged `OK`. The log file only ever has one line, and the monitoring server never saw a failure.",
+      "task": [
+        "Start the fake API on 8124. Run `bash check-api.sh http://127.0.0.1:8124/health-db-down; echo $?` and read `health.log`.",
+        "Run it twice. How many lines are in `health.log`?",
+        "Find 4 bugs: no `-f`, no timeout, `>` instead of `>>`, and no exit code 2.",
+        "Fix it. Test `/health`, `/health-db-down` and `/slow`, and show the log without the time column."
+      ],
+      "hints": [
+        "Without `-f`, curl's exit code is 0 for a 503 answer.",
+        "`--max-time 3` (the comment says 3 seconds).",
+        "Add `exit 2` in the DOWN branch."
+      ],
+      "solution": [
+        "python3 fake-api.py 8124 &",
+        "SRV=$!",
+        "sleep 1",
+        "bash check-api.sh http://127.0.0.1:8124/health-db-down; echo \"exit code: $?\"",
+        "bash check-api.sh http://127.0.0.1:8124/health-db-down",
+        "echo \"lines in health.log: $(wc -l < health.log)\"; cut -d' ' -f2- health.log",
+        "rm -f health.log",
+        "cat > check-api.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Runs every 5 minutes from cron. Appends ONE line per run to health.log.",
+        "# Exit 0 if healthy, exit 2 if not (Nagios style). Must never wait longer than 3 seconds.",
+        "URL=${1:-http://127.0.0.1:8124/health}",
+        "if curl -fs --max-time 3 \"$URL\" > /dev/null; then",
+        "  echo \"$(date +%T) OK $URL\" >> health.log",
+        "  exit 0",
+        "else",
+        "  echo \"$(date +%T) DOWN $URL\" >> health.log",
+        "  exit 2",
+        "fi",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "for path in health health-db-down slow; do",
+        "  bash check-api.sh \"http://127.0.0.1:8124/$path\"; echo \"$path: exit code $?\"",
+        "done",
+        "cut -d' ' -f2- health.log",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "-f",
+          "meaning": "Bug 1: the 503 page was a \"successful\" download, so the check said OK."
+        },
+        {
+          "part": "--max-time 3",
+          "meaning": "Bug 2: `/slow` would block the cron job for 5 seconds or more."
+        },
+        {
+          "part": ">> health.log",
+          "meaning": "Bug 3: `>` replaced the log on every run, so the history was lost."
+        },
+        {
+          "part": "exit 2",
+          "meaning": "Bug 4: the script always ended with 0, so the monitoring server saw success."
+        },
+        {
+          "part": "cut -d' ' -f2-",
+          "meaning": "Here only to hide the time column, which changes every run."
+        }
+      ],
+      "expected_output": "exit code: 0\nlines in health.log: 1\nOK http://127.0.0.1:8124/health-db-down\n--- fixed ---\nhealth: exit code 0\nhealth-db-down: exit code 2\nslow: exit code 2\nOK http://127.0.0.1:8124/health\nDOWN http://127.0.0.1:8124/health-db-down\nDOWN http://127.0.0.1:8124/slow",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Unquoted `$URL`: a URL with `&` in the query string breaks the command.",
+        "Running a health check from the same server as the app only. If the server is down, nothing alerts. Run checks from outside too."
+      ],
+      "interview_say": "A cron health check needs `curl -f` and a timeout, must append to its log, and must return a non-zero exit code on failure, so the scheduler or monitoring agent can react.",
+      "try_yourself": "Add a 1 (WARNING) exit code for answers slower than 1 second: use `-w '%{time_total}'`."
+    },
+    {
+      "id": "d25p05",
+      "title": "Put it together: healthcheck.sh for cron",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 15,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The final tool checks the API, the disks and the memory in one run, prints one summary line per check, writes everything to a log, returns Nagios-style exit codes (0 OK, 1 WARNING, 2 CRITICAL), and never overlaps itself.",
+      "task": [
+        "Write `healthcheck.sh` with `set -uo pipefail` (not `-e`: a failed check must not stop the other checks).",
+        "Run 3 checks: API (critical if down), disk (warning above 90%), memory (warning below 10%).",
+        "Use `flock` so two runs never overlap. Append the summary to `healthcheck.log`.",
+        "Exit with the worst result. Test with good and bad inputs. Print the crontab line."
+      ],
+      "hints": [
+        "Keep a variable `WORST=0`; after each check: `(( rc > WORST )) && WORST=$rc`.",
+        "Use env variables for testing: `URL`, `DF_FILE`, `MEMINFO`.",
+        "`DF_FILE` empty → use real `df -P`: `{ [ -n \"${DF_FILE:-}\" ] && cat \"$DF_FILE\" || df -P; }`."
+      ],
+      "solution": [
+        "cat > healthcheck.sh <<'EOF'",
+        "#!/bin/bash",
+        "# healthcheck.sh - exit 0 OK, 1 WARNING, 2 CRITICAL",
+        "set -uo pipefail",
+        "URL=${URL:-http://127.0.0.1:8125/health}",
+        "LOG=${LOG:-healthcheck.log}",
+        "exec 9> .healthcheck.lock",
+        "flock -n 9 || { echo \"UNKNOWN: previous run still active\"; exit 3; }",
+        "WORST=0",
+        "result() { echo \"$1 $2\"; echo \"$(date '+%F %T') $1 $2\" >> \"$LOG\"; (( $3 > WORST )) && WORST=$3; return 0; }",
+        "if curl -fs --max-time 3 \"$URL\" > /dev/null; then result OK \"api $URL\" 0",
+        "else result CRITICAL \"api $URL is down\" 2; fi",
+        "DISK=$({ [ -n \"${DF_FILE:-}\" ] && cat \"$DF_FILE\" || df -P; } | awk 'NR > 1 {gsub(\"%\", \"\", $5); if ($5 >= 90) print $6 \"=\" $5 \"%\"}' | xargs)",
+        "if [ -z \"$DISK\" ]; then result OK \"disk below 90%\" 0; else result WARNING \"disk $DISK\" 1; fi",
+        "MEM=$(awk '/^MemTotal:/ {t = $2} /^MemAvailable:/ {a = $2} END {printf \"%d\", a * 100 / t}' \"${MEMINFO:-/proc/meminfo}\")",
+        "if (( MEM >= 10 )); then result OK \"memory available $MEM%\" 0; else result WARNING \"memory available $MEM%\" 1; fi",
+        "exit \"$WORST\"",
+        "EOF",
+        "python3 fake-api.py 8125 &",
+        "SRV=$!",
+        "sleep 1",
+        "echo \"=== all good ===\"",
+        "DF_FILE=/dev/null MEMINFO=meminfo-ok.txt bash healthcheck.sh; echo \"exit code: $?\"",
+        "echo \"=== full disk and low memory ===\"",
+        "DF_FILE=df-p.txt MEMINFO=meminfo-low.txt bash healthcheck.sh; echo \"exit code: $?\"",
+        "echo \"=== API down too ===\"",
+        "URL=http://127.0.0.1:8125/health-db-down DF_FILE=df-p.txt MEMINFO=meminfo-ok.txt bash healthcheck.sh; echo \"exit code: $?\"",
+        "kill $SRV",
+        "echo \"log lines: $(wc -l < healthcheck.log)\"",
+        "echo \"crontab: */5 * * * * cd $HOME/bash-practice/day25 && ./healthcheck.sh >> cron.out 2>&1\""
+      ],
+      "explanation": [
+        {
+          "part": "set -uo pipefail (no -e)",
+          "meaning": "A failing check is expected; the script must continue and report all checks."
+        },
+        {
+          "part": "flock -n 9 ... exit 3",
+          "meaning": "No overlapping runs; 3 = UNKNOWN in Nagios style."
+        },
+        {
+          "part": "result()",
+          "meaning": "One place to print, log, and keep the worst code."
+        },
+        {
+          "part": "env variables for inputs",
+          "meaning": "`URL`, `DF_FILE`, `MEMINFO`: real values by default, test files when set."
+        },
+        {
+          "part": "awk gsub + xargs",
+          "meaning": "List all full mounts on one line, like `/=92%`."
+        },
+        {
+          "part": "exit \"$WORST\"",
+          "meaning": "0 OK, 1 WARNING, 2 CRITICAL: what Nagios, Icinga and many cron monitors expect."
+        },
+        {
+          "part": "./healthcheck.sh in cron",
+          "meaning": "Make it executable first: `chmod +x healthcheck.sh`."
+        }
+      ],
+      "expected_output": "=== all good ===\nOK api http://127.0.0.1:8125/health\nOK disk below 90%\nOK memory available 61%\nexit code: 0\n=== full disk and low memory ===\nOK api http://127.0.0.1:8125/health\nWARNING disk /=92%\nWARNING memory available 5%\nexit code: 1\n=== API down too ===\nCRITICAL api http://127.0.0.1:8125/health-db-down is down\nWARNING disk /=92%\nOK memory available 61%\nexit code: 2\nlog lines: 9\ncrontab: */5 * * * * cd /home/wicky/bash-practice/day25 && ./healthcheck.sh >> cron.out 2>&1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `set -e` in a multi-check script: the first failed check stops everything, and the other results are never shown.",
+        "Mixing up exit codes: if both WARNING and CRITICAL happen, report CRITICAL (the worst)."
+      ],
+      "interview_say": "My health check runs all checks even if one fails, logs each result, uses a lock to avoid overlapping runs, and exits with the worst status: 0 OK, 1 warning, 2 critical. Inputs come from environment variables so I can test the alert paths.",
+      "try_yourself": "Add a fourth check: the TLS certificate expiry of a site, with `openssl s_client` (needs internet). Warning when less than 14 days are left."
+    },
+    {
+      "id": "d25p06",
+      "title": "Send the alert to a chat webhook (local test receiver)",
+      "type": "command",
+      "topic": "DevOps tools",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Alerts go to the team's Slack or Teams channel through an incoming webhook: an HTTP POST with a small JSON body. Here a tiny local receiver plays Slack and saves what it gets, so nothing leaves the laptop.",
+      "task": [
+        "Start the test receiver (see the solution, first lines). It saves each POST body into `received.json`.",
+        "Build the JSON safely with `printf` and proper quotes (or `jq -n` if installed).",
+        "POST it with `curl -fsS -X POST -H 'Content-Type: application/json' --data \"$PAYLOAD\" URL`.",
+        "Show what the receiver got."
+      ],
+      "hints": [
+        "A Slack message body: `{\"text\": \"...\"}`.",
+        "The webhook URL is a secret: read it from a variable or file, never write it in the script.",
+        "`--data @file.json` sends a file as the body."
+      ],
+      "solution": [
+        "python3 -c '",
+        "import http.server",
+        "class H(http.server.BaseHTTPRequestHandler):",
+        "    def log_message(self, *a): pass",
+        "    def do_POST(self):",
+        "        body = self.rfile.read(int(self.headers[\"Content-Length\"]))",
+        "        open(\"received.json\", \"wb\").write(body)",
+        "        self.send_response(200); self.end_headers(); self.wfile.write(b\"ok\")",
+        "http.server.HTTPServer((\"127.0.0.1\", 8126), H).serve_forever()",
+        "' &",
+        "RCV=$!",
+        "sleep 1",
+        "WEBHOOK_URL=${WEBHOOK_URL:-http://127.0.0.1:8126/services/T000/B000/XXXX}",
+        "HOST=todo-prod-1",
+        "PAYLOAD=$(printf '{\"text\": \":red_circle: CRITICAL on %s: api /health is down\"}' \"$HOST\")",
+        "curl -fsS -X POST -H 'Content-Type: application/json' --data \"$PAYLOAD\" \"$WEBHOOK_URL\"; echo",
+        "echo \"receiver got: $(cat received.json)\"",
+        "kill $RCV"
+      ],
+      "explanation": [
+        {
+          "part": "incoming webhook",
+          "meaning": "A secret URL; anything POSTed there appears in the channel."
+        },
+        {
+          "part": "-X POST -H 'Content-Type: application/json'",
+          "meaning": "Send JSON in the request body."
+        },
+        {
+          "part": "--data \"$PAYLOAD\"",
+          "meaning": "The body. Quote it, it contains spaces."
+        },
+        {
+          "part": "${WEBHOOK_URL:-...}",
+          "meaning": "Real URL from the environment (a secret), test URL by default."
+        },
+        {
+          "part": "-fsS",
+          "meaning": "Fail on HTTP errors, quiet, but show errors (Day 18)."
+        }
+      ],
+      "expected_output": "ok\nreceiver got: {\"text\": \":red_circle: CRITICAL on todo-prod-1: api /health is down\"}",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Putting user text into JSON without escaping: a `\"` in the message breaks the JSON. Use `jq -n --arg t \"$msg\" '{text: $t}'`.",
+        "Committing the webhook URL to git: anyone can then post into the team channel. Keep it in a secret store or env file with 600 permissions (Day 26)."
+      ],
+      "interview_say": "For chat alerts I POST a small JSON body to an incoming webhook with `curl -fsS`, build the JSON with jq to escape text safely, and keep the webhook URL as a secret, not in the code.",
+      "try_yourself": "If `jq` is installed: `jq -n --arg t 'He said \"hi\"' '{text: $t}'`. See how jq escapes the quotes."
+    }
+  ],
+  "interview": [
+    {
+      "q": "How would you write a simple health check for a web API?",
+      "a": "`curl -fsS --max-time 5 https://api/health`, check the status code (and maybe the JSON body), retry a few times with a pause, log the result, and exit non-zero on failure.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What exit codes do monitoring tools like Nagios expect?",
+      "a": "0 = OK, 1 = WARNING, 2 = CRITICAL, 3 = UNKNOWN. A check script should exit with the worst result.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you avoid alert spam?",
+      "a": "Alert only when the state changes (keep the last state in a file), use retries for short glitches, and send a recovery message. Monitoring tools add grouping and silences.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you test alert logic without breaking a real server?",
+      "a": "Make inputs configurable: read `df -P` from stdin, take the meminfo path and the URL from variables, and test with saved files and a fake API.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Why should a health check have a timeout?",
+      "a": "A hanging service would make the check hang too. The check would then never report, and cron runs would pile up. A timeout turns \"hanging\" into a clear failure.",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "curl -s -o /dev/null -w '%{http_code}' --max-time N",
+      "meaning": "Status code with a timeout",
+      "example": "code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \"$url\")",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "[[ $code == 2* ]]",
+      "meaning": "Any 2xx status",
+      "example": "[[ $code == 2* ]] && echo OK",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "for ((i=1; i<=n; i++)); do ...; sleep d; done",
+      "meaning": "Retry loop",
+      "example": "check_url \"$URL\" 3 2",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "${MEMINFO:-/proc/meminfo}",
+      "meaning": "Real input by default, test file when set",
+      "example": "MEMINFO=low.txt ./check.sh",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "health.state",
+      "meaning": "Remember the last state; alert on change",
+      "example": "[ \"$new\" != \"$old\" ] && alert",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "exit 0/1/2/3",
+      "meaning": "OK / WARNING / CRITICAL / UNKNOWN",
+      "example": "exit \"$WORST\"",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "curl -X POST -H 'Content-Type: application/json' --data",
+      "meaning": "Send a webhook alert",
+      "example": "curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"text\":\"down\"}' \"$WEBHOOK_URL\"",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "*/5 * * * * cd dir && ./check.sh",
+      "meaning": "Run a check every 5 minutes",
+      "example": "*/5 * * * * /opt/hc/healthcheck.sh >> /var/log/hc.log 2>&1",
+      "topic": "Services"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "curl health endpoint with timeout and retries",
+      "problems": [
+        "d25p01",
+        "d25p04"
+      ]
+    },
+    {
+      "item": "Disk and memory threshold alerts",
+      "problems": [
+        "d25p02",
+        "d25p05"
+      ]
+    },
+    {
+      "item": "Exit codes",
+      "problems": [
+        "d25p04",
+        "d25p05"
+      ]
+    },
+    {
+      "item": "Cron schedule",
+      "problems": [
+        "d25p04",
+        "d25p05"
+      ]
+    },
+    {
+      "item": "Write to a log file",
+      "problems": [
+        "d25p03",
+        "d25p05"
+      ]
+    },
+    {
+      "item": "Alert without spam, webhook",
+      "problems": [
+        "d25p03",
+        "d25p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day25"
+}

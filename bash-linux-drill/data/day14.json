@@ -1,0 +1,562 @@
+{
+  "day": 14,
+  "week": 2,
+  "review_day": true,
+  "title": "Week 2 review: log-processing challenge",
+  "goal": "Answer real questions about a production access log with grep, sed, awk, sort and uniq, then wrap the pipeline in a reusable function.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day14 && cd ~/bash-practice/day14",
+    "# access log of the to-do app: ip - - [time] \"METHOD PATH HTTP/1.1\" status bytes ms \"user-agent\"",
+    "n=0",
+    "for spec in /api/todos:20 /api/todos/1:4 /api/todos/2:3 /api/todos/15:5 /health:12 /login:9 /api/users/7:6; do",
+    "  p=${spec%:*}; c=${spec#*:}",
+    "  for ((k = 0; k < c; k++)); do",
+    "    n=$((n + 1))",
+    "    case $((n % 4)) in 0) ip=10.0.0.5 ;; 1) ip=10.0.0.7 ;; 2) ip=192.168.1.20 ;; 3) ip=172.16.0.3 ;; esac",
+    "    case $((n % 9)) in 0) st=500 ;; 4) st=404 ;; *) st=200 ;; esac",
+    "    m=GET; [ \"$p\" = /login ] && m=POST",
+    "    ua=Mozilla/5.0; [ \"$p\" = /health ] && { ua=kube-probe/1.29; st=200; }",
+    "    ms=$(( (n * 53) % 700 + 20 )); [ \"$st\" = 500 ] && ms=$((ms + 1500))",
+    "    printf '%s - - [20/Oct/2026:10:%02d:%02d +0530] \"%s %s HTTP/1.1\" %s 512 %s \"%s\"\\n' \"$ip\" $((n / 60)) $((n % 60)) \"$m\" \"$p\" \"$st\" \"$ms\" \"$ua\"",
+    "  done",
+    "done > access.log",
+    "# P4: the same log under a name with a space, and a broken report script",
+    "cp access.log \"web 1.log\"",
+    "printf '%s\\n' '#!/bin/bash' '# Usage: report.sh <logfile> [top-n]   (top-n is optional, default 3)' '# Prints the top N paths, then the average response time in ms (field 11).' 'top_paths() {' '  awk '\"'\"'{print $7}'\"'\"' $1 | sort | uniq -c | sort -rn | head -n \"$2\"' '}' 'avg_ms() {' '  return $(awk '\"'\"'{s += $11} END {print int(s / NR)}'\"'\"' \"$1\")' '}' 'LOG=$1' 'N=$2' 'top_paths \"$LOG\" \"$N\"' 'avg_ms \"$LOG\"' 'echo \"average: $? ms\"' > report.sh",
+    "cd ~/bash-practice/day14"
+  ],
+  "warmup": [
+    {
+      "q": "How do you get the file name from `$path` with parameter expansion?",
+      "a": "`${path##*/}`",
+      "from_day": 13
+    },
+    {
+      "q": "Which grep options print only the matching part with extended regex?",
+      "a": "`grep -oE`",
+      "from_day": 10
+    },
+    {
+      "q": "How does a function return a string?",
+      "a": "It prints it with `echo`; the caller uses `VAR=$(func)`.",
+      "from_day": 9
+    },
+    {
+      "q": "What is the safe way to read a file line by line?",
+      "a": "`while IFS= read -r line; do ...; done < file`",
+      "from_day": 8
+    }
+  ],
+  "problems": [
+    {
+      "id": "d14p01",
+      "title": "Challenge 1: clean the log (grep + sed)",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The to-do app's `access.log` is full of Kubernetes health checks (user agent `kube-probe`). They hide the real traffic. Also, paths like `/api/todos/15` should count as one endpoint `/api/todos/:id`. Build a clean file for the next challenges.",
+      "task": [
+        "Count the lines of `access.log`, and count the `kube-probe` lines.",
+        "Remove the probe lines with `grep -v`.",
+        "In the same pipeline, replace a number at the end of an API path with `:id` using `sed -E`.",
+        "Save the result as `clean.log`, count its lines, and show its first 3 lines."
+      ],
+      "hints": [
+        "`grep -c kube-probe access.log` counts the probes.",
+        "`sed -E 's#(/api/[a-z]+)/[0-9]+ #\\1/:id #'` (with `#` as delimiter, because the text has `/`).",
+        "`grep -v kube-probe access.log | sed -E '...' > clean.log`"
+      ],
+      "solution": [
+        "echo \"all lines:   $(wc -l < access.log)\"",
+        "echo \"probe lines: $(grep -c kube-probe access.log)\"",
+        "grep -v 'kube-probe' access.log \\",
+        "  | sed -E 's#(/api/[a-z]+)/[0-9]+ #\\1/:id #' > clean.log",
+        "echo \"clean lines: $(wc -l < clean.log)\"",
+        "head -n 3 clean.log",
+        "grep -m 1 ':id' clean.log"
+      ],
+      "explanation": [
+        {
+          "part": "grep -v 'kube-probe'",
+          "meaning": "Remove health-check noise (Day 2 and 10)."
+        },
+        {
+          "part": "sed -E 's#...#...#'",
+          "meaning": "Extended regex substitute with `#` as delimiter (Day 11)."
+        },
+        {
+          "part": "(/api/[a-z]+)/[0-9]+ ",
+          "meaning": "Group 1 is `/api/todos`; then a slash, digits and a space."
+        },
+        {
+          "part": "\\1/:id",
+          "meaning": "Keep group 1, add `/:id`."
+        },
+        {
+          "part": "\\ at line end",
+          "meaning": "Continue the pipeline on the next line, for readability."
+        },
+        {
+          "part": "grep -m 1",
+          "meaning": "Stop after the first match."
+        }
+      ],
+      "expected_output": "all lines:   59\nprobe lines: 12\nclean lines: 47\n10.0.0.7 - - [20/Oct/2026:10:00:01 +0530] \"GET /api/todos HTTP/1.1\" 200 512 73 \"Mozilla/5.0\"\n192.168.1.20 - - [20/Oct/2026:10:00:02 +0530] \"GET /api/todos HTTP/1.1\" 200 512 126 \"Mozilla/5.0\"\n172.16.0.3 - - [20/Oct/2026:10:00:03 +0530] \"GET /api/todos HTTP/1.1\" 200 512 179 \"Mozilla/5.0\"\n10.0.0.7 - - [20/Oct/2026:10:00:21 +0530] \"GET /api/todos/:id HTTP/1.1\" 200 512 433 \"Mozilla/5.0\"",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting the space after `[0-9]+` in the pattern: it also changes `/api/todos/15/items` paths in bigger logs.",
+        "Writing the result to `access.log` itself (`> access.log`): the file is emptied before grep reads it."
+      ],
+      "interview_say": "First I remove noise like health checks with `grep -v`, then I normalise ids in paths with `sed -E`, so the next counts group the same endpoint together.",
+      "try_yourself": "Also normalise user ids and count how many different endpoints are left: `awk '{print $7}' clean.log | sort -u | wc -l`."
+    },
+    {
+      "id": "d14p02",
+      "title": "Challenge 2: status classes and error rate (awk)",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team lead asks for the health of the API in numbers: how many 2xx, 4xx and 5xx responses, and the 5xx error rate in percent. Use `clean.log` (run Challenge 1 first, or copy its command).",
+      "task": [
+        "Find the field number of the status code (count the fields of one line, or use `awk '{print $9}'`).",
+        "Count the responses per class (`2xx`, `4xx`, `5xx`) with an awk array and `substr($9, 1, 1)`.",
+        "Print the 5xx error rate with one decimal in `END`.",
+        "Print the 5xx lines: time, path and response time only."
+      ],
+      "hints": [
+        "Fields: 1 ip, 4 time, 6 method, 7 path, 9 status, 11 ms.",
+        "`substr($9, 1, 1)` = the first character of the status: 2, 4 or 5.",
+        "`$9 >= 500 { e++ } END { printf \"%.1f%%\\n\", e * 100 / NR }`"
+      ],
+      "solution": [
+        "[ -f clean.log ] || grep -v kube-probe access.log | sed -E 's#(/api/[a-z]+)/[0-9]+ #\\1/:id #' > clean.log",
+        "awk '{ c[substr($9, 1, 1) \"xx\"]++ } END { for (k in c) print k, c[k] }' clean.log | sort",
+        "awk '$9 >= 500 { e++ } END { printf \"5xx rate: %.1f%% of %d requests\\n\", e * 100 / NR, NR }' clean.log",
+        "echo \"=== 5xx details ===\"",
+        "awk '$9 >= 500 { print $4, $7, $11 \" ms\" }' clean.log | tr -d '['"
+      ],
+      "explanation": [
+        {
+          "part": "substr($9, 1, 1) \"xx\"",
+          "meaning": "First digit plus `xx`: the key becomes `2xx`, `4xx` or `5xx`."
+        },
+        {
+          "part": "c[key]++",
+          "meaning": "Count per key in an awk array (Day 11)."
+        },
+        {
+          "part": "e * 100 / NR",
+          "meaning": "awk does decimal math; NR in END is the number of lines."
+        },
+        {
+          "part": "tr -d '['",
+          "meaning": "Remove the `[` before the time (Day 12)."
+        },
+        {
+          "part": "[ -f clean.log ] ||",
+          "meaning": "Create `clean.log` only if Challenge 1 was not done (Day 6)."
+        }
+      ],
+      "expected_output": "2xx 36\n4xx 6\n5xx 5\n5xx rate: 10.6% of 47 requests\n=== 5xx details ===\n20/Oct/2026:10:00:09 /api/todos 1997 ms\n20/Oct/2026:10:00:18 /api/todos 1774 ms\n20/Oct/2026:10:00:27 /api/todos/:id 1551 ms\n20/Oct/2026:10:00:45 /login 1805 ms\n20/Oct/2026:10:00:54 /api/users/:id 1582 ms",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `$8` for the status: the method field `\"GET` makes the count shift. Always check the field numbers on one line first.",
+        "Dividing with bash `$(( ))`: it gives a whole number (0 or 7), not 7.6."
+      ],
+      "interview_say": "I group status codes by class with an awk array and compute the error rate in END. If the 5xx rate is high, I look at the 5xx lines and their paths and times.",
+      "try_yourself": "Compute the error rate for the original `access.log` too. Why is it lower there? (Hint: probes are always 200.)"
+    },
+    {
+      "id": "d14p03",
+      "title": "Challenge 3: top endpoints and the IPs behind errors",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Product wants the most used endpoints. Security wants to know which clients get the most 5xx errors and which IP sends the most POST /login requests (a possible password-guessing attack).",
+      "task": [
+        "Top 3 endpoints in `clean.log` with counts (`sort | uniq -c | sort -rn | head`).",
+        "IPs that received 5xx errors, with counts.",
+        "IPs that sent `POST /login`, with counts, biggest first."
+      ],
+      "hints": [
+        "Endpoint = field 7.",
+        "Filter in awk first: `awk '$9 >= 500 {print $1}'`.",
+        "For login: `awk '$6 == \"\\\"POST\" && $7 == \"/login\" {print $1}'` or `grep '\"POST /login'` then `awk '{print $1}'`."
+      ],
+      "solution": [
+        "[ -f clean.log ] || grep -v kube-probe access.log | sed -E 's#(/api/[a-z]+)/[0-9]+ #\\1/:id #' > clean.log",
+        "echo \"=== top 3 endpoints ===\"",
+        "awk '{print $7}' clean.log | sort | uniq -c | sort -rn | head -n 3",
+        "echo \"=== IPs with 5xx ===\"",
+        "awk '$9 >= 500 {print $1}' clean.log | sort | uniq -c | sort -rn",
+        "echo \"=== POST /login per IP ===\"",
+        "grep '\"POST /login ' clean.log | awk '{print $1}' | sort | uniq -c | sort -rn"
+      ],
+      "explanation": [
+        {
+          "part": "awk '{print $7}' | sort | uniq -c | sort -rn",
+          "meaning": "The classic counting pipeline (Day 12), now on endpoints."
+        },
+        {
+          "part": "awk '$9 >= 500 {print $1}'",
+          "meaning": "Filter and pick a field in one step."
+        },
+        {
+          "part": "grep '\"POST /login '",
+          "meaning": "Fixed text with the quote, method, path and a space: no false matches."
+        }
+      ],
+      "expected_output": "=== top 3 endpoints ===\n     20 /api/todos\n     12 /api/todos/:id\n      9 /login\n=== IPs with 5xx ===\n      2 192.168.1.20\n      2 10.0.0.7\n      1 172.16.0.3\n=== POST /login per IP ===\n      3 10.0.0.7\n      2 192.168.1.20\n      2 172.16.0.3\n      2 10.0.0.5",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Counting before normalising ids: `/api/todos/1`, `/2` and `/15` are counted as three different endpoints.",
+        "Using `head` before `sort -rn`: the result is the first lines of the file, not the top values."
+      ],
+      "interview_say": "To find top endpoints or suspicious clients, I filter with awk or grep, then use `sort | uniq -c | sort -rn | head`.",
+      "try_yourself": "Find the endpoint with the most 404 responses."
+    },
+    {
+      "id": "d14p04",
+      "title": "Find the bug: report.sh",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate turned the pipelines into `report.sh`. It works for `access.log` with a number, but `bash report.sh \"web 1.log\"` fails, and the average time it prints is far too small.",
+      "task": [
+        "Run `bash report.sh \"web 1.log\"` (no second argument). Read the errors.",
+        "Run `bash report.sh access.log 3`. Compare the average with `awk '{s+=$11} END {print int(s/NR)}' access.log`.",
+        "Find 3 bugs: an unquoted variable, a missing default, and `return` used for data.",
+        "Fix them and run `bash report.sh \"web 1.log\"` again."
+      ],
+      "hints": [
+        "Inside `top_paths`, `$1` is not quoted.",
+        "The comment says top-n is optional with default 3: `N=${2:-3}`.",
+        "`return` keeps only 0-255. Print the average with `echo` and catch it with `$( )`."
+      ],
+      "solution": [
+        "bash report.sh \"web 1.log\"",
+        "echo \"--- correct average for comparison ---\"",
+        "awk '{s += $11} END {print int(s / NR)}' access.log",
+        "cat > report.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: report.sh <logfile> [top-n]   (top-n is optional, default 3)",
+        "# Prints the top N paths, then the average response time in ms (field 11).",
+        "top_paths() {",
+        "  awk '{print $7}' \"$1\" | sort | uniq -c | sort -rn | head -n \"$2\"",
+        "}",
+        "avg_ms() {",
+        "  awk '{s += $11} END {print int(s / NR)}' \"$1\"",
+        "}",
+        "LOG=${1:?usage: report.sh <logfile> [top-n]}",
+        "N=${2:-3}",
+        "top_paths \"$LOG\" \"$N\"",
+        "echo \"average: $(avg_ms \"$LOG\") ms\"",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "bash report.sh \"web 1.log\""
+      ],
+      "explanation": [
+        {
+          "part": "\"$1\" in top_paths",
+          "meaning": "Bug 1: without quotes, awk got `web` and `1.log` as two files."
+        },
+        {
+          "part": "N=${2:-3}",
+          "meaning": "Bug 2: with no second argument, `head -n \"\"` failed."
+        },
+        {
+          "part": "echo + $(avg_ms ...)",
+          "meaning": "Bug 3: `return 559` became 559 % 256 = 47. Data must be printed, not returned."
+        },
+        {
+          "part": "${1:?usage...}",
+          "meaning": "Bonus: stop with a usage message when no log file is given."
+        }
+      ],
+      "expected_output": "awk: cannot open \"web\" (No such file or directory)\nhead: invalid number of lines: ‘’\naverage: 223 ms\n--- correct average for comparison ---\n479\n--- fixed ---\n     20 /api/todos\n     12 /health\n      9 /login\naverage: 479 ms",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Quoting only `$LOG` in the main part and forgetting `$1` inside the function. Every use needs quotes.",
+        "Thinking the small average is a data problem. A value that is always below 256 is a hint that `return` was used."
+      ],
+      "checks": [
+        {
+          "run": "bash report.sh \"web 1.log\"",
+          "expect": "awk: cannot open \"web\""
+        },
+        {
+          "run": "bash report.sh \"web 1.log\"",
+          "expect": "head: invalid number of lines: ‘’"
+        }
+      ],
+      "interview_say": "The three bugs I see most in bash reports are unquoted variables, missing defaults for optional arguments, and functions that use `return` for data. ShellCheck finds the first one.",
+      "try_yourself": "Add a third optional argument: the field number to report (default 7), and use `awk -v f=\"$3\" '{print $f}'`."
+    },
+    {
+      "id": "d14p05",
+      "title": "Convert the pipeline into a reusable function",
+      "type": "convert",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user typed `awk '{print $N}' file | sort | uniq -c | sort -rn | head -n K` many times today with different N and K. Make one function `top_n FIELD COUNT FILE` and use it three times.",
+      "task": [
+        "Write `top_n()` with three arguments: field number, how many lines, and the file. Use `local` variables.",
+        "Check that the field and count are numbers; if not, print a usage message to stderr and `return 2`.",
+        "Use it for: top 2 IPs, top 3 paths, and top status codes, on `access.log`.",
+        "Call it with a wrong field (`x`) and print the exit code."
+      ],
+      "hints": [
+        "Pass the field to awk with `-v f=\"$field\"` and print `$f`.",
+        "`[[ $field =~ ^[0-9]+$ ]] || { echo \"usage: ...\" >&2; return 2; }`",
+        "`top_n 1 2 access.log`, `top_n 7 3 access.log`, `top_n 9 5 access.log`."
+      ],
+      "solution": [
+        "top_n() {",
+        "  local field=$1 count=$2 file=$3",
+        "  if ! [[ $field =~ ^[0-9]+$ && $count =~ ^[0-9]+$ ]]; then",
+        "    echo \"usage: top_n FIELD COUNT FILE\" >&2",
+        "    return 2",
+        "  fi",
+        "  awk -v f=\"$field\" '{print $f}' \"$file\" | sort | uniq -c | sort -rn | head -n \"$count\"",
+        "}",
+        "echo \"=== top 2 IPs ===\";      top_n 1 2 access.log",
+        "echo \"=== top 3 paths ===\";    top_n 7 3 access.log",
+        "echo \"=== status codes ===\";   top_n 9 5 access.log",
+        "top_n x 3 access.log; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "local field=$1 count=$2 file=$3",
+          "meaning": "Name the arguments; keep them inside the function (Day 9)."
+        },
+        {
+          "part": "=~ ^[0-9]+$",
+          "meaning": "Validate input with a regex (Day 6)."
+        },
+        {
+          "part": "awk -v f=\"$field\" '{print $f}'",
+          "meaning": "Pass a shell value into awk; `$f` is the field with that number."
+        },
+        {
+          "part": "return 2",
+          "meaning": "Here `return` is right: it reports failure, not data."
+        }
+      ],
+      "expected_output": "=== top 2 IPs ===\n     15 192.168.1.20\n     15 172.16.0.3\n=== top 3 paths ===\n     20 /api/todos\n     12 /health\n      9 /login\n=== status codes ===\n     48 200\n      6 404\n      5 500\nusage: top_n FIELD COUNT FILE\nexit code: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `awk '{print $'$field'}'`: it works, but quoting is hard to read and easy to break. `-v` is clearer.",
+        "Leaving the function's variables global: they can overwrite `count` or `file` in the caller."
+      ],
+      "interview_say": "When I repeat a pipeline, I turn it into a function with named local arguments, validate them, and pass values to awk with `-v`.",
+      "try_yourself": "Put `top_n` into a file `logtools.sh` and load it in a new terminal with `source logtools.sh`."
+    },
+    {
+      "id": "d14p06",
+      "title": "Slowest endpoints: average time per path",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Users say the app feels slow. The user computes the average response time per endpoint from `clean.log` and lists the slowest first, so the backend team knows where to look.",
+      "task": [
+        "In awk, sum field 11 per path (field 7) and count requests per path.",
+        "In `END`, print `average path count` for each path.",
+        "Sort by the average, biggest first."
+      ],
+      "hints": [
+        "Two arrays: `sum[$7] += $11; n[$7]++`.",
+        "`END { for (p in sum) printf \"%6.0f %-16s %d\\n\", sum[p] / n[p], p, n[p] }`",
+        "`| sort -rn`"
+      ],
+      "solution": [
+        "[ -f clean.log ] || grep -v kube-probe access.log | sed -E 's#(/api/[a-z]+)/[0-9]+ #\\1/:id #' > clean.log",
+        "awk '{ sum[$7] += $11; n[$7]++ }",
+        "     END { for (p in sum) printf \"%6.0f ms  %-16s %d requests\\n\", sum[p] / n[p], p, n[p] }' clean.log | sort -rn"
+      ],
+      "explanation": [
+        {
+          "part": "sum[$7] += $11; n[$7]++",
+          "meaning": "Total time and number of requests per path."
+        },
+        {
+          "part": "sum[p] / n[p]",
+          "meaning": "Average per path."
+        },
+        {
+          "part": "%6.0f",
+          "meaning": "Number with no decimals, 6 wide, so `sort -rn` reads it as a number."
+        }
+      ],
+      "expected_output": "   606 ms  /login           9 requests\n   500 ms  /api/todos/:id   12 requests\n   482 ms  /api/todos       20 requests\n   464 ms  /api/users/:id   6 requests",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Averages hide spikes. One 2000 ms request among fast ones looks fine on average. Also check the maximum or the 95th percentile."
+      ],
+      "interview_say": "I group by endpoint in awk with two arrays, sum and count, then print the average per endpoint and sort it. For real monitoring I would use percentiles in Prometheus or CloudWatch.",
+      "try_yourself": "Add the maximum time per path: `if ($11 > max[$7]) max[$7] = $11`."
+    }
+  ],
+  "interview": [
+    {
+      "q": "Rapid 1: How do you read a file line by line without losing backslashes?",
+      "a": "`while IFS= read -r line; do ...; done < file`. `-r` keeps backslashes.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 2: How do you create an associative array?",
+      "a": "`declare -A ports=([web]=80)`; read with `${ports[web]}`; keys with `${!ports[@]}`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 3: `return` vs `echo` in a function?",
+      "a": "`return` sets an exit code (0-255). `echo` prints data, caught with `$(func)`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 4: `\"$@\"` vs `\"$*\"`?",
+      "a": "`\"$@\"` keeps each argument separate. `\"$*\"` joins them into one string.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 5: grep for ERROR or FATAL, with 2 lines of context after?",
+      "a": "`grep -E -A 2 'ERROR|FATAL' app.log`",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 6: Replace every `http:` with `https:` in a file, in place, with a backup?",
+      "a": "`sed -i.bak 's/http:/https:/g' file`",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 7: Sum the 3rd column of a CSV?",
+      "a": "`awk -F, '{s += $3} END {print s}' file.csv`",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 8: Find and delete `.tmp` files older than 3 days?",
+      "a": "`find /path -name '*.tmp' -mtime +3 -print` to check, then the same with `-delete`.",
+      "topic": "Files"
+    },
+    {
+      "q": "Rapid 9: Top 5 IPs in an access log?",
+      "a": "`awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -n 5`",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 10: File name from a path, and a date for a backup name?",
+      "a": "`${path##*/}` and `date +%Y%m%d-%H%M%S`.",
+      "topic": "Variables"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "grep -v pattern | sed -E 's#a#b#'",
+      "meaning": "Remove noise, then normalise",
+      "example": "grep -v kube-probe access.log | sed -E 's#/[0-9]+ #/:id #'",
+      "topic": "Text"
+    },
+    {
+      "cmd": "substr(s, start, len)",
+      "meaning": "awk substring",
+      "example": "awk '{print substr($9,1,1)}' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk 'cond {print $1}' | sort | uniq -c | sort -rn",
+      "meaning": "Filter, then count and rank",
+      "example": "awk '$9>=500 {print $1}' access.log | sort | uniq -c | sort -rn",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk -v f=\"$n\" '{print $f}'",
+      "meaning": "Field number from a shell variable",
+      "example": "awk -v f=7 '{print $f}' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -m 1",
+      "meaning": "Stop after the first match",
+      "example": "grep -m 1 ERROR app.log",
+      "topic": "Text"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "grep (Day 10)",
+      "problems": [
+        "d14p01",
+        "d14p03"
+      ]
+    },
+    {
+      "item": "sed (Day 11)",
+      "problems": [
+        "d14p01"
+      ]
+    },
+    {
+      "item": "awk (Day 11)",
+      "problems": [
+        "d14p02",
+        "d14p03",
+        "d14p06"
+      ]
+    },
+    {
+      "item": "sort, uniq pipelines (Day 12)",
+      "problems": [
+        "d14p03",
+        "d14p05"
+      ]
+    },
+    {
+      "item": "Functions and arguments (Day 9)",
+      "problems": [
+        "d14p04",
+        "d14p05"
+      ]
+    },
+    {
+      "item": "Parameter expansion (Day 13)",
+      "problems": [
+        "d14p04"
+      ]
+    },
+    {
+      "item": "10 rapid interview questions",
+      "problems": []
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day14"
+}

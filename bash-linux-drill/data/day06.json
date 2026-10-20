@@ -1,0 +1,808 @@
+{
+  "day": 6,
+  "week": 1,
+  "title": "Conditions and exit codes",
+  "goal": "Make scripts decide: test files, strings and numbers, choose with case, and return exit codes that CI tools understand.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day06 && cd ~/bash-practice/day06",
+    "# P1: a release folder in different states",
+    "mkdir -p release/logs",
+    "printf 'port: 8080\\n' > release/app.yml",
+    ": > release/empty.lock",
+    "printf '#!/bin/bash\\necho start\\n' > release/deploy.sh",
+    "chmod 644 release/deploy.sh",
+    "# P3: disk usage numbers from 4 servers",
+    "printf '%s\\n' 'web-01 45' 'web-02 85' 'db-01 92' 'cache-01 9' > disk-usage.txt",
+    "# P5: a broken health check script",
+    "mkdir -p logs",
+    "echo 200 > last-code.txt",
+    "printf '%s\\n' '#!/bin/bash' '# Check that the log folder exists and that the last HTTP code is 200.' '# Optional argument: number of retries (warn if more than 3).' 'LOG_DIR=logs' 'CODE=$(cat last-code.txt)' 'RETRIES=$1' 'if [ -f \"$LOG_DIR\" ]; then echo \"log folder OK\"; else echo \"log folder MISSING\"; fi' 'if [\"$CODE\" = \"200\"]; then echo \"HTTP OK\"; else echo \"HTTP FAIL\"; fi' 'if [ $RETRIES -gt 3 ]; then echo \"warning: $RETRIES retries\"; fi' > health.sh",
+    "# P7: a small log",
+    "printf '%s\\n' 'INFO start' 'ERROR disk full' 'INFO stop' > app.log",
+    "cd ~/bash-practice/day06"
+  ],
+  "warmup": [
+    {
+      "q": "What is the difference between `'$HOME'` and `\"$HOME\"`?",
+      "a": "Single quotes print `$HOME` literally. Double quotes replace it with `/home/wicky`.",
+      "from_day": 5
+    },
+    {
+      "q": "A child script cannot see `DB_HOST`. What is missing?",
+      "a": "`export DB_HOST`. Only exported variables are passed to child processes.",
+      "from_day": 5
+    },
+    {
+      "q": "What does `cmd 2>&1 > file` do wrong?",
+      "a": "stderr is sent to the screen (where stdout was at that moment), then stdout moves to the file. Correct: `cmd > file 2>&1`.",
+      "from_day": 4
+    },
+    {
+      "q": "Which `xargs` option runs one command per input line, putting the line at `{}`?",
+      "a": "`-I{}`, for example `xargs -I{} echo docker pull {} < images.txt`.",
+      "from_day": 4
+    }
+  ],
+  "problems": [
+    {
+      "id": "d06p01",
+      "title": "Pre-deploy checks with file tests",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": "release",
+      "situation": "Before every deploy, a script must check the release folder: the config exists and is not empty, the logs folder exists, the deploy script can run, and the lock file is empty. If one check fails, the deploy must stop.",
+      "task": [
+        "In `release`, write a script `check.sh` (or type the lines directly) that tests each item below and prints `OK` or `FAIL`.",
+        "`app.yml` is a regular file (`-f`) and not empty (`-s`).",
+        "`logs` is a folder (`-d`), and it is writable (`-w`).",
+        "`deploy.sh` is executable (`-x`). `empty.lock` exists (`-e`) but is empty (`! -s`).",
+        "Count the failures and finish with `exit 1` if there is at least one."
+      ],
+      "hints": [
+        "Pattern: `if [ -f app.yml ]; then echo \"OK ...\"; else echo \"FAIL ...\"; fi`.",
+        "`!` means not: `[ ! -s empty.lock ]` is true when the file is empty.",
+        "Use a counter: `FAILS=0`, and in the else part `FAILS=$((FAILS + 1))`. At the end: `[ \"$FAILS\" -eq 0 ] || exit 1`."
+      ],
+      "solution": [
+        "cat > check.sh <<'EOF'",
+        "#!/bin/bash",
+        "FAILS=0",
+        "check() {               # usage: check \"description\" test-arguments...",
+        "  local msg=$1; shift",
+        "  if [ \"$@\" ]; then echo \"OK   $msg\"; else echo \"FAIL $msg\"; FAILS=$((FAILS + 1)); fi",
+        "}",
+        "check \"app.yml is a file\"        -f app.yml",
+        "check \"app.yml is not empty\"     -s app.yml",
+        "check \"logs is a folder\"         -d logs",
+        "check \"logs is writable\"         -w logs",
+        "check \"deploy.sh is executable\"  -x deploy.sh",
+        "check \"empty.lock exists\"        -e empty.lock",
+        "check \"empty.lock is empty\"      ! -s empty.lock",
+        "echo \"failures: $FAILS\"",
+        "[ \"$FAILS\" -eq 0 ] || exit 1",
+        "EOF",
+        "bash check.sh; echo \"exit code: $?\"",
+        "chmod +x deploy.sh               # fix the problem",
+        "bash check.sh; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "-f / -d / -e",
+          "meaning": "Regular file / folder (directory) / exists (any type)."
+        },
+        {
+          "part": "-s",
+          "meaning": "File exists and its size is more than 0."
+        },
+        {
+          "part": "-r / -w / -x",
+          "meaning": "The current user can read / write / execute it."
+        },
+        {
+          "part": "! -s",
+          "meaning": "`!` negates the test: true when the file is empty."
+        },
+        {
+          "part": "[ \"$@\" ]",
+          "meaning": "Runs the test with the remaining arguments. A small function keeps the script short (Day 9)."
+        },
+        {
+          "part": "exit 1",
+          "meaning": "Tell the caller (Jenkins, cron, another script) that the checks failed."
+        }
+      ],
+      "expected_output": "OK   app.yml is a file\nOK   app.yml is not empty\nOK   logs is a folder\nOK   logs is writable\nFAIL deploy.sh is executable\nOK   empty.lock exists\nOK   empty.lock is empty\nfailures: 1\nexit code: 1\nOK   app.yml is a file\nOK   app.yml is not empty\nOK   logs is a folder\nOK   logs is writable\nOK   deploy.sh is executable\nOK   empty.lock exists\nOK   empty.lock is empty\nfailures: 0\nexit code: 0",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `-f` on a folder: `[ -f logs ]` is false, because `logs` is a directory. Use `-d`, or `-e` for \"any type\".",
+        "No spaces inside the brackets: `[-f app.yml]` gives `bash: [-f: command not found`.",
+        "Printing FAIL but ending with exit code 0. Jenkins then shows the step as green."
+      ],
+      "checks": [
+        {
+          "run": "[-f release/app.yml]",
+          "expect": "bash: [-f: command not found"
+        }
+      ],
+      "interview_say": "I test files with `-f` for a file, `-d` for a folder, `-e` for exists, `-s` for not empty, and `-r -w -x` for permissions. If a check fails, the script ends with a non-zero exit code so the pipeline stops.",
+      "try_yourself": "Add a check that `app.yml` is newer than `deploy.sh`: `[ app.yml -nt deploy.sh ]`."
+    },
+    {
+      "id": "d06p02",
+      "title": "[ ] vs [[ ]]: empty variables and patterns",
+      "type": "explain-error",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "A Jenkins job prints `[: =: unary operator expected` when the `BRANCH` variable is empty. The team also wants to deploy only branches that start with `release/`. `[[ ]]` solves both problems.",
+      "task": [
+        "Set `BRANCH=` (empty). Run `[ $BRANCH = main ] && echo yes`. Read the error.",
+        "Run the same test with quotes: `[ \"$BRANCH\" = main ]`. Then with `[[ $BRANCH = main ]]`.",
+        "Set `BRANCH=release/2.4`. Test the pattern `[[ $BRANCH == release/* ]]`.",
+        "Check the version format with a regex: `[[ $VERSION =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]` for `2.4.1` and `2.4`.",
+        "Combine two tests inside `[[ ]]` with `&&`."
+      ],
+      "hints": [
+        "With an empty unquoted variable, `[ $BRANCH = main ]` becomes `[ = main ]`. One word is missing.",
+        "`[[ ]]` is a bash keyword: it does not split variables, and it supports `==` patterns and `=~` regex.",
+        "In `[[ ]]`, do not quote the right side of a pattern, or it is compared as plain text."
+      ],
+      "solution": [
+        "BRANCH=",
+        "[ $BRANCH = main ] && echo yes || echo \"test failed, exit code: $?\"",
+        "[ \"$BRANCH\" = main ] || echo \"quoted [ ]: no error, just false\"",
+        "[[ $BRANCH = main ]] || echo \"[[ ]]: no error, just false\"",
+        "BRANCH=release/2.4",
+        "if [[ $BRANCH == release/* ]]; then echo \"deploy $BRANCH to staging\"; fi",
+        "for VERSION in 2.4.1 2.4; do",
+        "  if [[ $VERSION =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then echo \"$VERSION: valid\"; else echo \"$VERSION: invalid\"; fi",
+        "done",
+        "[[ -n $BRANCH && $BRANCH != main ]] && echo \"feature or release branch\""
+      ],
+      "explanation": [
+        {
+          "part": "unary operator expected",
+          "meaning": "`[` got `= main` with nothing on the left, because the empty variable vanished. Exit code 2 = error in the test."
+        },
+        {
+          "part": "[ \"$BRANCH\" = main ]",
+          "meaning": "Quotes keep an empty value as one empty word. Always quote inside `[ ]`."
+        },
+        {
+          "part": "[[ ... ]]",
+          "meaning": "Bash keyword. Variables are not split, so quotes are optional on the left side."
+        },
+        {
+          "part": "== release/*",
+          "meaning": "Pattern match (like file wildcards) inside `[[ ]]` only."
+        },
+        {
+          "part": "=~ regex",
+          "meaning": "Regular expression match. `^` start, `$` end, `[0-9]+` one or more digits, `\\.` a real dot."
+        },
+        {
+          "part": "-n / -z",
+          "meaning": "String is not empty / is empty."
+        }
+      ],
+      "expected_output": "bash: [: =: unary operator expected\ntest failed, exit code: 2\nquoted [ ]: no error, just false\n[[ ]]: no error, just false\ndeploy release/2.4 to staging\n2.4.1: valid\n2.4: invalid\nfeature or release branch",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`[ $BRANCH = main ]` with empty BRANCH: `bash: [: =: unary operator expected`.",
+        "Quoting the pattern: `[[ $BRANCH == \"release/*\" ]]` compares with the text `release/*` and is false.",
+        "Using `[[ ]]` in a script run by `sh script.sh`: `sh` (dash) gives `[[: not found`. Run it with `bash`."
+      ],
+      "checks": [
+        {
+          "run": "[[ release/2.4 == \"release/*\" ]] || echo false",
+          "expect": "false"
+        },
+        {
+          "run": "printf '[[ a == a ]] && echo ok\\n' > t.sh; sh t.sh",
+          "expect": "[[: not found"
+        }
+      ],
+      "interview_say": "`[ ]` is the old test command, so I must quote variables. `[[ ]]` is a bash keyword: it handles empty variables safely and supports patterns and regex. In bash scripts I prefer `[[ ]]`.",
+      "try_yourself": "Run `[[ $BRANCH =~ ^release/([0-9.]+)$ ]] && echo \"${BASH_REMATCH[1]}\"`. What does `BASH_REMATCH` hold?",
+      "table": {
+        "head": [
+          "",
+          "`[ ]` (test)",
+          "`[[ ]]` (bash)"
+        ],
+        "rows": [
+          [
+            "Empty variable without quotes",
+            "error",
+            "works"
+          ],
+          [
+            "Pattern `== release/*`",
+            "no",
+            "yes"
+          ],
+          [
+            "Regex `=~`",
+            "no",
+            "yes"
+          ],
+          [
+            "Join tests",
+            "`[ a ] && [ b ]`",
+            "`[[ a && b ]]`"
+          ],
+          [
+            "Works in `sh` (POSIX)",
+            "yes",
+            "no (bash only)"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d06p03",
+      "title": "Disk alert: number tests and elif",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The monitoring team wants a simple rule for each server: 90% or more is CRITICAL, 80% or more is WARNING, else OK. The numbers are in `disk-usage.txt` (server name, then percent).",
+      "task": [
+        "Read the file line by line with `while read -r host pct`.",
+        "Use `if`, `elif`, `else` with number tests (`-ge`) to print the level for each server.",
+        "Count the CRITICAL servers and print the count at the end.",
+        "Read the Mistakes part: why `[ 9 > 10 ]` is dangerous."
+      ],
+      "hints": [
+        "For numbers use `-eq -ne -lt -le -gt -ge`. `=` and `!=` are for strings.",
+        "Test the biggest limit first: `if [ \"$pct\" -ge 90 ]; then ... elif [ \"$pct\" -ge 80 ]; then ... else ... fi`.",
+        "Inside `(( ))` normal math works: `(( pct >= 90 ))`."
+      ],
+      "solution": [
+        "CRIT=0",
+        "while read -r host pct; do",
+        "  if [ \"$pct\" -ge 90 ]; then",
+        "    level=CRITICAL; CRIT=$((CRIT + 1))",
+        "  elif [ \"$pct\" -ge 80 ]; then",
+        "    level=WARNING",
+        "  else",
+        "    level=OK",
+        "  fi",
+        "  printf '%-9s %3s%%  %s\\n' \"$host\" \"$pct\" \"$level\"",
+        "done < disk-usage.txt",
+        "echo \"critical servers: $CRIT\"",
+        "(( CRIT > 0 )) && echo \"page the on-call engineer\""
+      ],
+      "explanation": [
+        {
+          "part": "while read -r host pct",
+          "meaning": "Read each line; the first word goes to `host`, the rest to `pct`."
+        },
+        {
+          "part": "-ge 90",
+          "meaning": "Greater than or equal, for whole numbers."
+        },
+        {
+          "part": "elif",
+          "meaning": "\"else if\": checked only when the first test was false."
+        },
+        {
+          "part": "printf '%-9s %3s%%'",
+          "meaning": "Formatted print: `%-9s` text left-aligned in 9 characters, `%%` prints a real `%`."
+        },
+        {
+          "part": "(( CRIT > 0 ))",
+          "meaning": "Arithmetic test. True (exit 0) when the math result is not zero."
+        }
+      ],
+      "expected_output": "web-01     45%  OK\nweb-02     85%  WARNING\ndb-01      92%  CRITICAL\ncache-01    9%  OK\ncritical servers: 1\npage the on-call engineer",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`[ 9 > 10 ]` is not a comparison. `>` is a redirect: it creates a file called `10`, and the test is true.",
+        "Using `-gt` with text: `[ OK -gt 5 ]` gives `bash: [: OK: integer expression expected`.",
+        "Testing 80 before 90: then 92 matches the WARNING branch first and never becomes CRITICAL."
+      ],
+      "checks": [
+        {
+          "run": "[ 9 > 10 ] && echo true; ls 10",
+          "expect": "10"
+        },
+        {
+          "run": "[ OK -gt 5 ]",
+          "expect": "bash: [: OK: integer expression expected"
+        }
+      ],
+      "interview_say": "For numbers I use `-gt`, `-ge`, `-lt` and so on, or `(( ))`. In single brackets `>` is a redirect, not a comparison. I check the highest threshold first in an if/elif chain.",
+      "try_yourself": "Run `[ 9 > 10 ] && echo true; ls`. Do you see a file named `10`? Remove it with `rm 10`.",
+      "table": {
+        "head": [
+          "Numbers",
+          "Strings",
+          "Meaning"
+        ],
+        "rows": [
+          [
+            "`-eq`",
+            "`=` (or `==` in [[ ]])",
+            "equal"
+          ],
+          [
+            "`-ne`",
+            "`!=`",
+            "not equal"
+          ],
+          [
+            "`-lt` / `-gt`",
+            "`<` / `>` only in [[ ]]",
+            "less / greater"
+          ],
+          [
+            "`-le` / `-ge`",
+            "-",
+            "less or equal / greater or equal"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d06p04",
+      "title": "case: one script for dev, staging and prod",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team has one deploy script for all environments. The first argument decides the server and the number of replicas. Many `if/elif` lines are hard to read; `case` is clearer.",
+      "task": [
+        "Write `deploy-env.sh` that uses `case \"$1\" in ... esac`.",
+        "`dev` or `development`: 1 replica on `dev.local`. `staging`: 2 replicas. `prod` or `production`: 4 replicas, and print a warning.",
+        "Any other value: print a usage message to stderr and `exit 2`.",
+        "Run it with `dev`, `prod`, `test`, and with no argument. Print the exit code each time."
+      ],
+      "hints": [
+        "Each branch ends with `;;`. Use `|` for two names: `dev|development)`.",
+        "`*)` matches everything else. Put it last.",
+        "Usage to stderr: `echo \"usage: $0 dev|staging|prod\" >&2`."
+      ],
+      "solution": [
+        "cat > deploy-env.sh <<'EOF'",
+        "#!/bin/bash",
+        "case \"$1\" in",
+        "  dev|development) HOST=dev.local;     REPLICAS=1 ;;",
+        "  staging)         HOST=staging.local; REPLICAS=2 ;;",
+        "  prod|production) HOST=prod.local;    REPLICAS=4",
+        "                   echo \"WARNING: deploying to production\" ;;",
+        "  *) echo \"usage: $0 dev|staging|prod\" >&2",
+        "     exit 2 ;;",
+        "esac",
+        "echo \"deploy to $HOST with $REPLICAS replicas\"",
+        "EOF",
+        "for env in dev prod test \"\"; do",
+        "  echo \"--- arg: '$env'\"",
+        "  bash deploy-env.sh $env; echo \"exit code: $?\"",
+        "done"
+      ],
+      "explanation": [
+        {
+          "part": "case \"$1\" in",
+          "meaning": "Compare the value with each pattern from top to bottom."
+        },
+        {
+          "part": "dev|development)",
+          "meaning": "`|` means or: either word matches."
+        },
+        {
+          "part": ";;",
+          "meaning": "End of a branch. Bash jumps to `esac`."
+        },
+        {
+          "part": "*)",
+          "meaning": "Default branch: anything that did not match before."
+        },
+        {
+          "part": ">&2",
+          "meaning": "Send this message to stderr. Errors and usage messages belong there."
+        },
+        {
+          "part": "exit 2",
+          "meaning": "By habit, 2 means \"wrong usage\"; 1 means a general error."
+        }
+      ],
+      "expected_output": "--- arg: 'dev'\ndeploy to dev.local with 1 replicas\nexit code: 0\n--- arg: 'prod'\nWARNING: deploying to production\ndeploy to prod.local with 4 replicas\nexit code: 0\n--- arg: 'test'\nusage: deploy-env.sh dev|staging|prod\nexit code: 2\n--- arg: ''\nusage: deploy-env.sh dev|staging|prod\nexit code: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting `;;`: bash stops with `syntax error near unexpected token` and points at the `)` of the next pattern.",
+        "Putting `*)` first: it matches everything, so the other branches never run.",
+        "Ending with `fi` instead of `esac`. A `case` block always closes with `esac` (case backwards)."
+      ],
+      "checks": [
+        {
+          "run": "printf 'case x in\\n a) echo a\\n b) echo b ;;\\nesac\\n' > c.sh; bash c.sh",
+          "expect": "syntax error near unexpected token `)'"
+        }
+      ],
+      "interview_say": "I use `case` when one value decides between many options, like the environment name. Each pattern ends with `;;`, and `*)` handles wrong input with a usage message and exit code 2.",
+      "try_yourself": "Add a branch `[0-9]*)` that prints \"numbers are not environments\". Test with `bash deploy-env.sh 42`."
+    },
+    {
+      "id": "d06p05",
+      "title": "Find the bug: the health check script",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`health.sh` should say `log folder OK` and `HTTP OK`, and warn when the retries argument is more than 3. It prints `MISSING`, shows strange errors, and fails when no argument is given.",
+      "task": [
+        "Run `bash health.sh` (no argument). Read the output and the errors.",
+        "Find 3 bugs: a wrong file test, a missing space, and an empty variable.",
+        "Fix them. Use `${RETRIES:-0}` to give a default value of 0.",
+        "Run `bash health.sh` and `bash health.sh 5`."
+      ],
+      "hints": [
+        "`logs` is a folder, not a file.",
+        "`[` is a command. It needs a space after it, like any command.",
+        "With no argument, `$RETRIES` is empty: `[ -gt 3 ]`. A default and quotes fix it."
+      ],
+      "solution": [
+        "bash health.sh",
+        "cat > health.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Check that the log folder exists and that the last HTTP code is 200.",
+        "# Optional argument: number of retries (warn if more than 3).",
+        "LOG_DIR=logs",
+        "CODE=$(cat last-code.txt)",
+        "RETRIES=${1:-0}                     # default 0 when no argument",
+        "if [ -d \"$LOG_DIR\" ]; then echo \"log folder OK\"; else echo \"log folder MISSING\"; fi",
+        "if [ \"$CODE\" = \"200\" ]; then echo \"HTTP OK\"; else echo \"HTTP FAIL\"; fi",
+        "if [ \"$RETRIES\" -gt 3 ]; then echo \"warning: $RETRIES retries\"; fi",
+        "EOF",
+        "echo \"--- fixed, no argument ---\"",
+        "bash health.sh",
+        "echo \"--- fixed, 5 retries ---\"",
+        "bash health.sh 5"
+      ],
+      "explanation": [
+        {
+          "part": "-f → -d",
+          "meaning": "Bug 1: `logs` is a folder, so `-f` was false and printed MISSING."
+        },
+        {
+          "part": "[\"$CODE\" → [ \"$CODE\"",
+          "meaning": "Bug 2: no space after `[`. Bash looked for a command named `[200`."
+        },
+        {
+          "part": "${1:-0}",
+          "meaning": "Bug 3: use `0` when `$1` is empty or missing. Plus quotes around `$RETRIES`."
+        }
+      ],
+      "expected_output": "log folder MISSING\nhealth.sh: line 8: [200: command not found\nHTTP FAIL\nhealth.sh: line 9: [: -gt: unary operator expected\n--- fixed, no argument ---\nlog folder OK\nHTTP OK\n--- fixed, 5 retries ---\nlog folder OK\nHTTP OK\nwarning: 5 retries",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "The error `health.sh: line 8: [200: command not found` looks like a problem with the number 200. It is really the missing space.",
+        "`[ -gt 3 ]` with an empty variable: `health.sh: line 9: [: -gt: unary operator expected`."
+      ],
+      "checks": [
+        {
+          "run": "bash health.sh",
+          "expect": "health.sh: line 8: [200: command not found"
+        },
+        {
+          "run": "bash health.sh",
+          "expect": "health.sh: line 9: [: -gt: unary operator expected"
+        }
+      ],
+      "interview_say": "`[` is a command, so it needs spaces around it. I give arguments default values with `${1:-0}` and always quote variables in tests.",
+      "try_yourself": "Put `abc` in `last-code.txt`, and change the test to `-eq 200`. Run it. Read the new error."
+    },
+    {
+      "id": "d06p06",
+      "title": "Exit codes that CI understands",
+      "type": "concept",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Jenkins and GitHub Actions decide green or red only from the exit code of each step. The user learns the common codes and how to return them.",
+      "task": [
+        "Run `true; echo $?` and `false; echo $?`.",
+        "Run a missing command `nosuchcmd; echo $?` and a non-executable file `./app.log; echo $?`.",
+        "Run `bash -c 'exit 3'; echo $?` and `bash -c 'exit 300'; echo $?`.",
+        "Use `grep -q` (quiet) as a test: `grep -q ERROR app.log && echo \"errors found\"`."
+      ],
+      "hints": [
+        "0 = success. 1 = general error. 2 = wrong usage.",
+        "126 = found but not executable. 127 = command not found. 130 = stopped with Ctrl+C.",
+        "Exit codes are 0-255. 300 becomes 300 - 256 = 44."
+      ],
+      "solution": [
+        "true;  echo \"true:  $?\"",
+        "false; echo \"false: $?\"",
+        "nosuchcmd; echo \"missing command: $?\"",
+        "./app.log; echo \"not executable: $?\"",
+        "bash -c 'exit 3';   echo \"exit 3:   $?\"",
+        "bash -c 'exit 300'; echo \"exit 300: $?\"",
+        "grep -q ERROR app.log && echo \"errors found (grep -q prints nothing, only sets the code)\""
+      ],
+      "explanation": [
+        {
+          "part": "0",
+          "meaning": "Success."
+        },
+        {
+          "part": "1",
+          "meaning": "General failure (for example `false`, or `grep` found nothing)."
+        },
+        {
+          "part": "126 / 127",
+          "meaning": "Cannot execute (permission) / command not found."
+        },
+        {
+          "part": "exit 300 → 44",
+          "meaning": "Only 8 bits: the code is taken modulo 256."
+        },
+        {
+          "part": "grep -q",
+          "meaning": "Quiet: no output, only the exit code (0 = found)."
+        }
+      ],
+      "expected_output": "true:  0\nfalse: 1\nbash: nosuchcmd: command not found\nmissing command: 127\nbash: ./app.log: Permission denied\nnot executable: 126\nexit 3:   3\nexit 300: 44\nerrors found (grep -q prints nothing, only sets the code)",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Ending a failing script with `echo \"failed\"` only. `echo` succeeds, so the exit code is 0 and CI shows green. Add `exit 1`.",
+        "Using `exit -1`. It becomes 255 and confuses people. Use small positive numbers."
+      ],
+      "interview_say": "CI tools look only at the exit code: 0 is success, anything else fails the step. My scripts use `exit 1` for errors, 2 for wrong usage, and `grep -q` or `test` for checks.",
+      "try_yourself": "Run `sleep 30`, press `Ctrl+C`, then `echo $?`. You should see 130."
+    },
+    {
+      "id": "d06p07",
+      "title": "One-line checks with && and ||",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Short guard lines are common at the top of scripts: create a folder only if missing, stop if a tool is not installed, print a message only if errors exist.",
+      "task": [
+        "Create `backup` only if it does not exist: `[ -d backup ] || mkdir backup`.",
+        "Check a tool: `command -v kubectl >/dev/null 2>&1 || echo \"kubectl is not installed\"`.",
+        "Print a message only if the log has errors: `grep -q ERROR app.log && echo \"alert: errors in app.log\"`.",
+        "Use a guard with exit: `[ -f app.yml ] || { echo \"no app.yml\" >&2; exit 1; }` inside `bash -c`."
+      ],
+      "hints": [
+        "`A || B`: B runs only when A fails. `A && B`: B runs only when A works.",
+        "`command -v name` returns 0 when the command exists.",
+        "Group several commands after `||` with `{ ...; }`."
+      ],
+      "solution": [
+        "[ -d backup ] || mkdir backup",
+        "ls -d backup",
+        "command -v kubectl >/dev/null 2>&1 || echo \"kubectl is not installed\"",
+        "grep -q ERROR app.log && echo \"alert: errors in app.log\"",
+        "bash -c '[ -f app.yml ] || { echo \"no app.yml, stopping\" >&2; exit 1; }; echo \"never printed\"'",
+        "echo \"guard exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "[ -d backup ] || mkdir backup",
+          "meaning": "Make the folder only if the test fails. (`mkdir -p` does the same in one step.)"
+        },
+        {
+          "part": "command -v ... >/dev/null 2>&1",
+          "meaning": "Check if a tool exists, hide all output."
+        },
+        {
+          "part": "grep -q ... && echo",
+          "meaning": "Print only when grep finds something."
+        },
+        {
+          "part": "|| { ...; exit 1; }",
+          "meaning": "Guard clause: stop the script early with an error."
+        }
+      ],
+      "expected_output": "backup\nkubectl is not installed\nalert: errors in app.log\nno app.yml, stopping\nguard exit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "If `kubectl` is installed on the user's machine, that line prints nothing.",
+      "verified": true,
+      "mistakes": [
+        "Writing `|| echo \"error\"; exit 1` without braces: `exit 1` runs always, also on success.",
+        "Forgetting `>/dev/null 2>&1` with `command -v`: the path is printed when the tool exists."
+      ],
+      "interview_say": "I start scripts with guard lines like `command -v docker >/dev/null || { echo \"docker missing\" >&2; exit 1; }`, so the script fails early with a clear message.",
+      "try_yourself": "Rewrite the `kubectl` line as an `if ! command -v kubectl ...; then ... fi` block. Which one is easier to read for you?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "What is the difference between `[ ]` and `[[ ]]`?",
+      "a": "`[ ]` is the test command (POSIX), so variables must be quoted. `[[ ]]` is a bash keyword: it is safe with empty variables and supports patterns `==` and regex `=~`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you check if a file exists and is not empty?",
+      "a": "`[ -s file ]`. Use `-f` for a regular file, `-d` for a folder, and `-e` for any type.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you compare numbers in bash?",
+      "a": "With `-eq -ne -lt -le -gt -ge` inside `[ ]`, or with normal operators inside `(( ))`, for example `(( count > 5 ))`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What does exit code 127 mean? And 126?",
+      "a": "127: command not found. 126: the file was found but cannot be executed (for example no `x` permission).",
+      "topic": "Scripting"
+    },
+    {
+      "q": "When do you use `case` instead of `if`?",
+      "a": "When one value is compared with many options, like an environment name or a command argument. It is shorter and easier to read.",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "if / elif / else / fi",
+      "meaning": "Run code depending on a test",
+      "example": "if [ -f app.yml ]; then ...; fi",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "[ -f / -d / -e ]",
+      "meaning": "File / folder / exists",
+      "example": "[ -d logs ] || mkdir logs",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "[ -s / -r / -w / -x ]",
+      "meaning": "Not empty / readable / writable / executable",
+      "example": "[ -x deploy.sh ]",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "[ -z / -n ]",
+      "meaning": "String is empty / not empty",
+      "example": "[ -z \"$1\" ] && echo usage",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "-eq -ne -lt -le -gt -ge",
+      "meaning": "Compare whole numbers",
+      "example": "[ \"$pct\" -ge 90 ]",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "[[ ]]",
+      "meaning": "Bash test: safe, patterns, regex",
+      "example": "[[ $BRANCH == release/* ]]",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "=~",
+      "meaning": "Regex match inside [[ ]]",
+      "example": "[[ $v =~ ^[0-9]+$ ]]",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "(( ))",
+      "meaning": "Arithmetic test",
+      "example": "(( errors > 0 ))",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "case ... esac",
+      "meaning": "Choose by pattern",
+      "example": "case \"$1\" in dev) ...;; esac",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "${1:-default}",
+      "meaning": "Use a default if empty",
+      "example": "RETRIES=${1:-0}",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "exit N",
+      "meaning": "End the script with an exit code",
+      "example": "exit 1",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "grep -q",
+      "meaning": "Quiet grep: only the exit code",
+      "example": "grep -q ERROR app.log && alert",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "command -v",
+      "meaning": "Check that a tool is installed",
+      "example": "command -v docker >/dev/null || exit 1",
+      "topic": "Scripting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "if / elif / else",
+      "problems": [
+        "d06p01",
+        "d06p03",
+        "d06p05"
+      ]
+    },
+    {
+      "item": "[ ] vs [[ ]]",
+      "problems": [
+        "d06p02",
+        "d06p05"
+      ]
+    },
+    {
+      "item": "File tests -f -d -e -r -w -x -s",
+      "problems": [
+        "d06p01",
+        "d06p05"
+      ]
+    },
+    {
+      "item": "String tests",
+      "problems": [
+        "d06p02",
+        "d06p05"
+      ]
+    },
+    {
+      "item": "Number tests",
+      "problems": [
+        "d06p03",
+        "d06p05"
+      ]
+    },
+    {
+      "item": "case",
+      "problems": [
+        "d06p04"
+      ]
+    },
+    {
+      "item": "&& and ||",
+      "problems": [
+        "d06p07",
+        "d06p03"
+      ]
+    },
+    {
+      "item": "Exit codes",
+      "problems": [
+        "d06p01",
+        "d06p04",
+        "d06p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day06"
+}

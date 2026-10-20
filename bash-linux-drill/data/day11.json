@@ -1,0 +1,696 @@
+{
+  "day": 11,
+  "week": 2,
+  "title": "sed and awk",
+  "goal": "Edit config files with sed, cut out parts of logs, and compute counts, sums and averages with awk.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day11 && cd ~/bash-practice/day11",
+    "# P1/P5/P7: a Spring Boot style config",
+    "printf '%s\\n' '# todo-api config' 'server.port=8080' 'db.url=jdbc:postgresql://db01.internal:5432/todo' 'db.password=S3cret!' 'log.path=/var/log/todo/app.log' 'log.level=INFO' 'cache.enabled=false' > app.conf",
+    "# P2: a deploy log with sections",
+    "printf '%s\\n' '# deploy log' '09:00 checking cluster' '=== deploy start ===' '09:01 pull image todo-api:2.4.1' '09:02 apply manifests' '09:03 rollout status: ok' '=== deploy end ===' '09:04 cleanup' '# end of file' > deploy.log",
+    "# P3: access log: ip method path status bytes ms",
+    "printf '%s\\n' '10.0.0.5 GET /api/todos 200 512 35' '10.0.0.7 POST /api/todos 201 128 120' '192.168.1.20 GET /api/todos 500 64 2300' '10.0.0.5 GET /health 200 2 1' '10.0.0.7 DELETE /api/todos/7 204 0 40' '192.168.1.20 GET /api/todos 503 64 1900' > access.log",
+    "# P4: cloud cost export",
+    "printf '%s\\n' 'date,service,cost' '2026-10-01,EC2,12.50' '2026-10-01,S3,1.20' '2026-10-02,EC2,12.50' '2026-10-02,RDS,8.00' '2026-10-03,S3,1.30' '2026-10-03,EC2,13.00' > billing.csv",
+    "# P5: users file and a broken script",
+    "printf '%s\\n' 'name,team,role' 'pasindu,devops,associate' 'nimal,backend,senior' 'kavya,qa,lead' > users.csv",
+    "printf '%s\\n' '#!/bin/bash' '# 1) Print app.conf with the log path /var/log/todo changed to /data/logs/todo (no edit)' '# 2) Print name and role (columns 1 and 3) of each user in users.csv (comma separated), no header' 'OLD=/var/log/todo' 'NEW=/data/logs/todo' 'sed \"s/$OLD/$NEW/\" app.conf' 'awk \"{print $1, $3}\" users.csv' > report.sh",
+    "cd ~/bash-practice/day11"
+  ],
+  "warmup": [
+    {
+      "q": "Which grep options print only the matching part with extended regex?",
+      "a": "`grep -oE 'pattern' file`",
+      "from_day": 10
+    },
+    {
+      "q": "How do you remove comment and empty lines from a config with grep?",
+      "a": "`grep -Ev '^[[:space:]]*(#|$)' file`",
+      "from_day": 10
+    },
+    {
+      "q": "What is wrong with `get_port() { return 8080; }`?",
+      "a": "`return` gives only an exit code 0-255; 8080 becomes 144. Use `echo 8080` and `PORT=$(get_port)`.",
+      "from_day": 9
+    },
+    {
+      "q": "What does `\"$@\"` do in a wrapper script?",
+      "a": "It passes every argument on, exactly as given, also arguments with spaces.",
+      "from_day": 9
+    }
+  ],
+  "problems": [
+    {
+      "id": "d11p01",
+      "title": "sed: change config values safely",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The to-do API moves to a new database server and a new port. The user must change `app.conf` without opening an editor (a CI job will do the same). First print the result, then edit the file with a backup, then check the change with `diff`.",
+      "task": [
+        "Print the file with `server.port` changed from 8080 to 9090 (no edit yet).",
+        "Print it with every `db01.internal` changed to `db02.internal`.",
+        "Change the log path `/var/log/todo` to `/data/logs/todo`. Use `|` as the delimiter, because the path has `/`.",
+        "Now edit the file for real with all three changes in one `sed -i.bak` command (with `-e` for each change).",
+        "Show what changed with `diff app.conf.bak app.conf`."
+      ],
+      "hints": [
+        "Basic form: `sed 's/old/new/' file`. Add `g` at the end to change every match on a line.",
+        "Any character can be the delimiter: `sed 's|/var/log/todo|/data/logs/todo|'`.",
+        "`-i.bak` edits the file and keeps the old version as `app.conf.bak`."
+      ],
+      "solution": [
+        "sed 's/^server.port=8080$/server.port=9090/' app.conf | grep port",
+        "sed 's/db01\\.internal/db02.internal/g' app.conf | grep db.url",
+        "sed 's|/var/log/todo|/data/logs/todo|' app.conf | grep log.path",
+        "sed -i.bak -e 's/^server.port=8080$/server.port=9090/' \\",
+        "           -e 's/db01\\.internal/db02.internal/g' \\",
+        "           -e 's|/var/log/todo|/data/logs/todo|' app.conf",
+        "diff app.conf.bak app.conf; echo \"diff exit code: $? (1 = files differ)\""
+      ],
+      "explanation": [
+        {
+          "part": "s/old/new/",
+          "meaning": "Substitute: replace the first match on each line."
+        },
+        {
+          "part": "g",
+          "meaning": "Global: replace every match on the line, not only the first."
+        },
+        {
+          "part": "^...$",
+          "meaning": "Anchors: match the whole line, so `server.port=80800` is not changed."
+        },
+        {
+          "part": "db01\\.internal",
+          "meaning": "Escape the dot. In regex `.` means any character."
+        },
+        {
+          "part": "s|a|b|",
+          "meaning": "Another delimiter, so slashes in paths need no escaping."
+        },
+        {
+          "part": "-i.bak",
+          "meaning": "Edit in place and save the original as `.bak`. Without `-i`, sed only prints."
+        },
+        {
+          "part": "-e ... -e ...",
+          "meaning": "Several edits in one run. `\\` at the end of a line continues the command."
+        },
+        {
+          "part": "diff exit code 1",
+          "meaning": "`diff` returns 1 when the files are different (Day 2). Here that is the expected result."
+        }
+      ],
+      "expected_output": "server.port=9090\ndb.url=jdbc:postgresql://db02.internal:5432/todo\nlog.path=/data/logs/todo/app.log\n2,3c2,3\n< server.port=8080\n< db.url=jdbc:postgresql://db01.internal:5432/todo\n---\n> server.port=9090\n> db.url=jdbc:postgresql://db02.internal:5432/todo\n5c5\n< log.path=/var/log/todo/app.log\n---\n> log.path=/data/logs/todo/app.log\ndiff exit code: 1 (1 = files differ)",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Slashes in the pattern: `sed \"s/$OLD/$NEW/\"` with a path gives `sed: -e expression #1, char 9: unknown option to` and the letter `s`. Use `|` as delimiter.",
+        "`sed -i` with no backup on the only copy of a config. One wrong regex and the file is broken. Use `-i.bak` or test without `-i` first.",
+        "`sed 's/old/new/' file > file` empties the file: bash truncates it before sed reads it."
+      ],
+      "checks": [
+        {
+          "run": "OLD=/var/log/todo; NEW=/data; sed \"s/$OLD/$NEW/\" app.conf",
+          "expect": "unknown option to `s'"
+        },
+        {
+          "run": "cp app.conf c.conf; sed 's/a/b/' c.conf > c.conf; wc -c < c.conf",
+          "expect": "0"
+        }
+      ],
+      "interview_say": "I first run sed without `-i` to see the result, then use `sed -i.bak` so I have a backup, and check with `diff`. For paths I use `|` as the delimiter.",
+      "try_yourself": "Use a variable: `PORT=7070; sed \"s/^server.port=.*/server.port=$PORT/\" app.conf | grep port`. Why double quotes here?"
+    },
+    {
+      "id": "d11p02",
+      "title": "sed: print and delete lines and ranges",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The release manager wants only the deploy part of `deploy.log` (from `=== deploy start ===` to `=== deploy end ===`) for the release notes, without comment lines.",
+      "task": [
+        "Print only lines 2 to 4 with `sed -n '2,4p'`.",
+        "Delete comment lines with `sed '/^#/d'`.",
+        "Print the block from `deploy start` to `deploy end` with a range of two patterns.",
+        "Print the same block, but without the two `===` marker lines.",
+        "Delete the first and the last line of the file (`1d` and `$d`)."
+      ],
+      "hints": [
+        "`-n` = print nothing unless told. `p` = print. `d` = delete.",
+        "A range is `start,end`. Both can be line numbers or `/patterns/`.",
+        "For the inner block: pipe the result into `sed '1d;$d'`."
+      ],
+      "solution": [
+        "sed -n '2,4p' deploy.log",
+        "echo \"=== no comments ===\"",
+        "sed '/^#/d' deploy.log",
+        "echo \"=== deploy block ===\"",
+        "sed -n '/deploy start/,/deploy end/p' deploy.log",
+        "echo \"=== block without markers ===\"",
+        "sed -n '/deploy start/,/deploy end/p' deploy.log | sed '1d;$d'",
+        "echo \"=== without first and last line ===\"",
+        "sed '1d;$d' deploy.log"
+      ],
+      "explanation": [
+        {
+          "part": "sed -n '2,4p'",
+          "meaning": "Print only lines 2, 3 and 4."
+        },
+        {
+          "part": "/^#/d",
+          "meaning": "Delete every line that starts with `#`."
+        },
+        {
+          "part": "/start/,/end/p",
+          "meaning": "Print from the first line that matches `start` to the next line that matches `end`."
+        },
+        {
+          "part": "1d;$d",
+          "meaning": "Delete line 1 and the last line. `$` here means the last line, and `;` separates two commands."
+        }
+      ],
+      "expected_output": "09:00 checking cluster\n=== deploy start ===\n09:01 pull image todo-api:2.4.1\n=== no comments ===\n09:00 checking cluster\n=== deploy start ===\n09:01 pull image todo-api:2.4.1\n09:02 apply manifests\n09:03 rollout status: ok\n=== deploy end ===\n09:04 cleanup\n=== deploy block ===\n=== deploy start ===\n09:01 pull image todo-api:2.4.1\n09:02 apply manifests\n09:03 rollout status: ok\n=== deploy end ===\n=== block without markers ===\n09:01 pull image todo-api:2.4.1\n09:02 apply manifests\n09:03 rollout status: ok\n=== without first and last line ===\n09:00 checking cluster\n=== deploy start ===\n09:01 pull image todo-api:2.4.1\n09:02 apply manifests\n09:03 rollout status: ok\n=== deploy end ===\n09:04 cleanup",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting `-n` with `p`: every line is printed, and the matching lines are printed twice.",
+        "Using double quotes around `'1d;$d'`: bash replaces `$d` with an empty variable, and sed gets `1d;`."
+      ],
+      "interview_say": "`sed -n 'X,Yp'` prints a range of lines, and `/start/,/end/p` prints a block between two patterns. `d` deletes lines, for example `sed '/^#/d'` removes comments.",
+      "try_yourself": "Print the file with line numbers using `sed =`. Then try `sed -n '$='` to count the lines."
+    },
+    {
+      "id": "d11p03",
+      "title": "awk: a response time report",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 14,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The team lead asks: \"How many requests failed, what was the average response time, and which requests were slow?\" The access log has 6 fields: ip, method, path, status, bytes, ms. awk splits each line into fields `$1` to `$NF`.",
+      "task": [
+        "Print the IP and the status of each line (`$1`, `$4`).",
+        "Print the line number (`NR`) and the number of fields (`NF`) of each line.",
+        "Print only requests with status 500 or more (`$4 >= 500`).",
+        "Count requests and compute the average time (`$6`) in `END`.",
+        "Print a header in `BEGIN` and a nicely formatted summary with `printf`."
+      ],
+      "hints": [
+        "`awk '{print $1, $4}' access.log`. A comma between fields prints a space.",
+        "A condition before the braces: `awk '$4 >= 500 {print}' file`.",
+        "`{ sum += $6; n++ } END { printf \"avg %.1f ms\\n\", sum / n }`."
+      ],
+      "solution": [
+        "awk '{print $1, $4}' access.log",
+        "echo \"=== NR and NF ===\"",
+        "awk '{print NR, NF}' access.log | head -n 2",
+        "echo \"=== failed (status >= 500) ===\"",
+        "awk '$4 >= 500 {print $1, $3, $4}' access.log",
+        "echo \"=== summary ===\"",
+        "awk 'BEGIN { printf \"%-14s %6s\\n\", \"path\", \"ms\" }",
+        "     $6 > 1000 { printf \"%-14s %6d  SLOW\\n\", $3, $6 }",
+        "     { sum += $6; n++; if ($4 >= 500) err++ }",
+        "     END { printf \"requests: %d, errors: %d, avg: %.1f ms\\n\", n, err, sum / n }' access.log"
+      ],
+      "explanation": [
+        {
+          "part": "$1 ... $6",
+          "meaning": "Fields of the line, split by spaces. `$0` is the whole line."
+        },
+        {
+          "part": "NR / NF",
+          "meaning": "Number of the Record (line) / Number of Fields on this line."
+        },
+        {
+          "part": "$4 >= 500 {print}",
+          "meaning": "Pattern and action: run the action only for lines where the pattern is true."
+        },
+        {
+          "part": "sum += $6; n++",
+          "meaning": "Variables start at 0. Add up the time and count the lines."
+        },
+        {
+          "part": "BEGIN / END",
+          "meaning": "Run once before the first line / once after the last line."
+        },
+        {
+          "part": "printf \"%-14s %6d %.1f\"",
+          "meaning": "Formatted print: text left in 14 spaces, number right in 6, decimal with 1 digit."
+        }
+      ],
+      "expected_output": "10.0.0.5 200\n10.0.0.7 201\n192.168.1.20 500\n10.0.0.5 200\n10.0.0.7 204\n192.168.1.20 503\n=== NR and NF ===\n1 6\n2 6\n=== failed (status >= 500) ===\n192.168.1.20 /api/todos 500\n192.168.1.20 /api/todos 503\n=== summary ===\npath               ms\n/api/todos       2300  SLOW\n/api/todos       1900  SLOW\nrequests: 6, errors: 2, avg: 732.7 ms",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Double quotes around awk code: `awk \"{print $1}\"` lets bash replace `$1` first. Always use single quotes.",
+        "Dividing in `END` when the file is empty: Ubuntu's default awk (mawk) prints `-nan`, and gawk stops with `division by zero attempted`. Check `if (n > 0)` first.",
+        "Comparing as text: if a field is `-` or has letters, awk compares it as a string and the result is strange."
+      ],
+      "checks": [
+        {
+          "run": "awk '{s+=$1; n++} END {print s/n}' /dev/null",
+          "expect": "-nan"
+        }
+      ],
+      "interview_say": "awk splits each line into fields. I use `$1`, `NR` and `NF`, conditions like `$4 >= 500`, and `END` to print sums and averages, for example `awk '{s+=$6} END {print s/NR}'`.",
+      "try_yourself": "Print the slowest request only: `sort -k6 -n access.log | tail -n 1`, then do the same with awk using a `max` variable."
+    },
+    {
+      "id": "d11p04",
+      "title": "awk on a CSV: cost per service",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Finance sent the cloud cost export `billing.csv`. The user must report the total cost per service (EC2, S3, RDS) and the grand total. The file is comma separated and has a header line.",
+      "task": [
+        "Print the service and cost columns with `-F,` (skip the header with `NR > 1`).",
+        "Sum the cost per service in an awk array: `sum[$2] += $3`.",
+        "Print each service and its total in `END`, sorted by name.",
+        "Print the grand total with 2 decimals."
+      ],
+      "hints": [
+        "`-F,` sets the field separator to a comma.",
+        "awk arrays work like bash associative arrays: `sum[\"EC2\"]`.",
+        "`for (s in sum)` has no fixed order; pipe the output into `sort`."
+      ],
+      "solution": [
+        "awk -F, 'NR > 1 {print $2, $3}' billing.csv",
+        "echo \"=== total per service ===\"",
+        "awk -F, 'NR > 1 { sum[$2] += $3 }",
+        "         END { for (s in sum) printf \"%-4s %6.2f\\n\", s, sum[s] }' billing.csv | sort",
+        "echo \"=== grand total ===\"",
+        "awk -F, 'NR > 1 { t += $3 } END { printf \"%.2f USD\\n\", t }' billing.csv"
+      ],
+      "explanation": [
+        {
+          "part": "-F,",
+          "meaning": "Split fields at commas instead of spaces."
+        },
+        {
+          "part": "NR > 1",
+          "meaning": "Skip line 1 (the header)."
+        },
+        {
+          "part": "sum[$2] += $3",
+          "meaning": "An array keyed by service name; add the cost to that key."
+        },
+        {
+          "part": "for (s in sum)",
+          "meaning": "Loop over all keys in END."
+        },
+        {
+          "part": "| sort",
+          "meaning": "awk gives keys in random order. Sort for a stable report."
+        }
+      ],
+      "expected_output": "EC2 12.50\nS3 1.20\nEC2 12.50\nRDS 8.00\nS3 1.30\nEC2 13.00\n=== total per service ===\nEC2   38.00\nRDS    8.00\nS3     2.50\n=== grand total ===\n48.50 USD",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "No `-F,`: the whole line is `$1`, so `$2` and `$3` are empty and all sums are 0.",
+        "Not skipping the header: `cost` is added as 0, and `service` appears as a key in the report.",
+        "CSV with quoted commas (`\"Smith, John\"`) breaks `-F,`. For real CSV files, use a proper tool (Python, `csvkit`)."
+      ],
+      "interview_say": "For a quick CSV report I use `awk -F,` with `NR > 1` to skip the header and an array like `sum[$2] += $3` to group values, then sort the output.",
+      "try_yourself": "Add the number of rows per service: `cnt[$2]++`, and print `service total count`."
+    },
+    {
+      "id": "d11p05",
+      "title": "Find the bug: the sed and awk report",
+      "type": "fix-bug",
+      "topic": "Text",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`report.sh` should print `app.conf` with a new log path, and the name and role of every user. sed fails with a strange error, and awk stops with a syntax error.",
+      "task": [
+        "Run `bash report.sh` and read the errors and the output.",
+        "Find 4 bugs: the sed delimiter, the awk quotes, the field separator, and the header.",
+        "Fix them. The sed output must show `log.path=/data/logs/todo/app.log`, and awk must print 3 lines: `pasindu associate`, `nimal senior`, `kavya lead`."
+      ],
+      "hints": [
+        "The variables contain `/`, which ends the `s/.../.../` early. Use `|`.",
+        "awk code in double quotes: bash replaces `$1` and `$3` (empty) before awk starts.",
+        "Add `-F,` and the condition `NR > 1`. Pass shell values to awk with `-v` if needed."
+      ],
+      "solution": [
+        "bash report.sh",
+        "echo \"--- fixed ---\"",
+        "cat > report.sh <<'EOF'",
+        "#!/bin/bash",
+        "# 1) Print app.conf with the log path /var/log/todo changed to /data/logs/todo (no edit)",
+        "# 2) Print name and role (columns 1 and 3) of each user in users.csv (comma separated), no header",
+        "OLD=/var/log/todo",
+        "NEW=/data/logs/todo",
+        "sed \"s|$OLD|$NEW|\" app.conf | grep log.path",
+        "awk -F, 'NR > 1 {print $1, $3}' users.csv",
+        "EOF",
+        "bash report.sh"
+      ],
+      "explanation": [
+        {
+          "part": "sed \"s|$OLD|$NEW|\"",
+          "meaning": "Bug 1: with `/` as delimiter, the `/` inside `/var/log/todo` ended the pattern. Double quotes are right here, so bash puts the variables in."
+        },
+        {
+          "part": "awk '...'",
+          "meaning": "Bug 2: in double quotes, bash replaced `$1` and `$3` with empty text, so awk got `{print , }`: `syntax error at or near ,`. Single quotes keep `$1` for awk."
+        },
+        {
+          "part": "-F,",
+          "meaning": "Bug 3: the file is comma separated."
+        },
+        {
+          "part": "NR > 1",
+          "meaning": "Bug 4: skip the header line."
+        }
+      ],
+      "expected_output": "sed: -e expression #1, char 8: unknown option to `s'\nawk: line 1: syntax error at or near ,\n--- fixed ---\nlog.path=/data/logs/todo/app.log\npasindu associate\nnimal senior\nkavya lead",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Changing sed to single quotes too: then `$OLD` is not replaced and nothing matches. sed needs double quotes here; awk needs single quotes.",
+        "To use a shell variable in awk, write `awk -v role=\"$ROLE\" '$3 == role'`, not `$ROLE` inside the awk code."
+      ],
+      "checks": [
+        {
+          "run": "awk \"{print $1, $3}\" users.csv",
+          "expect": "syntax error at or near ,"
+        }
+      ],
+      "interview_say": "Two classic traps: slashes in sed patterns (use another delimiter) and double quotes around awk code (use single quotes and pass shell values with `-v`).",
+      "try_yourself": "Print only users with the role `lead` using `-v`: `awk -F, -v r=lead '$3 == r {print $1}' users.csv`."
+    },
+    {
+      "id": "d11p06",
+      "title": "awk tricks: $NF, line counts, column checks",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Small awk one-liners save time in daily work: the last field of each line, counting lines, finding broken lines with the wrong number of columns, and unique values.",
+      "task": [
+        "Print the last field of each line in `access.log` with `$NF`.",
+        "Count the lines: `awk 'END {print NR}'`.",
+        "Find lines in `billing.csv` that do not have exactly 3 fields.",
+        "Print each IP only once, in the order seen: `awk '!seen[$1]++'`."
+      ],
+      "hints": [
+        "`$NF` = the field number NF = the last field.",
+        "With `-F,` the separator is a comma: `NF != 3`.",
+        "`!seen[$1]++` is true only the first time a key appears."
+      ],
+      "solution": [
+        "awk '{print $NF}' access.log | head -n 3",
+        "awk 'END {print NR \" lines\"}' access.log",
+        "awk -F, 'NF != 3 {print \"bad line \" NR \": \" $0}' billing.csv; echo \"(no output = all lines have 3 fields)\"",
+        "awk '!seen[$1]++ {print $1}' access.log"
+      ],
+      "explanation": [
+        {
+          "part": "$NF",
+          "meaning": "Last field. `$(NF-1)` is the one before it."
+        },
+        {
+          "part": "END {print NR}",
+          "meaning": "After the last line, NR is the line count (like `wc -l`)."
+        },
+        {
+          "part": "NF != 3",
+          "meaning": "Lines with a different number of columns, often broken data."
+        },
+        {
+          "part": "!seen[$1]++",
+          "meaning": "Print the first time each value appears. Like `sort -u`, but keeps the order."
+        }
+      ],
+      "expected_output": "35\n120\n2300\n6 lines\n(no output = all lines have 3 fields)\n10.0.0.5\n10.0.0.7\n192.168.1.20",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `$NF-1` for the second to last field: awk computes (last field) minus 1. Write `$(NF-1)`."
+      ],
+      "interview_say": "`$NF` gives the last field, `NR` the line number, and `!seen[$1]++` removes duplicates but keeps the original order.",
+      "try_yourself": "Print the number of fields of every line in `deploy.log`. Which lines have the most words?"
+    },
+    {
+      "id": "d11p07",
+      "title": "sed with groups: mask secrets, reformat dates",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Before sending a config to a vendor, the user must hide the password. A report also needs dates as `DD/MM/YYYY` instead of `YYYY-MM-DD`. sed capture groups `( )` with `\\1` keep parts of the match.",
+      "task": [
+        "Print `app.conf` with the value after `db.password=` replaced by `*****`.",
+        "Convert `2026-10-01` to `01/10/2026` in the dates of `billing.csv` (print only the first 3 lines)."
+      ],
+      "hints": [
+        "`sed -E 's/(db.password=).*/\\1*****/'`: `\\1` is the text of the first group.",
+        "Dates: `([0-9]{4})-([0-9]{2})-([0-9]{2})` and `\\3/\\2/\\1`. Use `|` as delimiter because the new text has `/`.",
+        "`-E` allows `( )` and `{4}` without backslashes."
+      ],
+      "solution": [
+        "sed -E 's/^(db\\.password=).*/\\1*****/' app.conf | grep password",
+        "sed -E 's|([0-9]{4})-([0-9]{2})-([0-9]{2})|\\3/\\2/\\1|' billing.csv | head -n 3"
+      ],
+      "explanation": [
+        {
+          "part": "( )",
+          "meaning": "A group: remember this part of the match."
+        },
+        {
+          "part": "\\1 \\2 \\3",
+          "meaning": "Put the remembered groups back, in any order."
+        },
+        {
+          "part": ".*",
+          "meaning": "Any text until the end of the line (the secret)."
+        },
+        {
+          "part": "-E",
+          "meaning": "Extended regex for sed (like `grep -E`)."
+        }
+      ],
+      "expected_output": "db.password=*****\ndate,service,cost\n01/10/2026,EC2,12.50\n01/10/2026,S3,1.20",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Masking with `grep -v password` removes the line. The vendor then does not know the setting exists. Masking keeps the key.",
+        "Never paste real secrets in tickets or chat, even masked. Rotate a secret if it was shown by mistake."
+      ],
+      "interview_say": "I use sed groups to keep part of a match, for example `s/(password=).*/\\1*****/` to mask secrets before I share a config or a log.",
+      "try_yourself": "Mask every number in the `db.url` port: `sed -E 's/:[0-9]+\\//:****\\//' app.conf | grep db.url`."
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you replace a word in a file without opening an editor?",
+      "a": "`sed -i.bak 's/old/new/g' file`. `-i` edits in place, `.bak` keeps a backup, `g` changes every match on a line.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you print only lines 10 to 20 of a file?",
+      "a": "`sed -n '10,20p' file` (or `awk 'NR>=10 && NR<=20' file`).",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you print the first column of a file with awk? And for a CSV?",
+      "a": "`awk '{print $1}' file`. For a CSV: `awk -F, '{print $1}' file.csv`.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you compute the average of a column with awk?",
+      "a": "`awk '{s += $3; n++} END {if (n) print s/n}' file`.",
+      "topic": "Text"
+    },
+    {
+      "q": "Why do we use single quotes around awk programs?",
+      "a": "So bash does not replace `$1`, `$2` and so on. Those are awk fields, not shell variables.",
+      "topic": "Text"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "sed 's/a/b/g'",
+      "meaning": "Replace text (g = all matches on a line)",
+      "example": "sed 's/db01/db02/g' app.conf",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sed 's|a|b|'",
+      "meaning": "Other delimiter for paths",
+      "example": "sed 's|/var/log|/data/log|' app.conf",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sed -i.bak",
+      "meaning": "Edit in place with a backup",
+      "example": "sed -i.bak 's/8080/9090/' app.conf",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sed -n 'X,Yp'",
+      "meaning": "Print lines X to Y",
+      "example": "sed -n '10,20p' app.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sed '/re/d'",
+      "meaning": "Delete matching lines",
+      "example": "sed '/^#/d' app.conf",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sed -n '/a/,/b/p'",
+      "meaning": "Print a block between two patterns",
+      "example": "sed -n '/start/,/end/p' deploy.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sed -E 's/(x).*/\\1/'",
+      "meaning": "Groups and back references",
+      "example": "sed -E 's/(password=).*/\\1***/'",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk '{print $1}'",
+      "meaning": "Print a field",
+      "example": "awk '{print $1, $4}' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk -F,",
+      "meaning": "Set the field separator",
+      "example": "awk -F, 'NR>1 {print $2}' billing.csv",
+      "topic": "Text"
+    },
+    {
+      "cmd": "NR / NF / $NF",
+      "meaning": "Line number / field count / last field",
+      "example": "awk '{print NR, $NF}' file",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk 'cond {action}'",
+      "meaning": "Act only on matching lines",
+      "example": "awk '$4 >= 500' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "BEGIN / END",
+      "meaning": "Run before / after all lines",
+      "example": "awk '{s+=$6} END {print s/NR}' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk arrays",
+      "meaning": "Group and sum by key",
+      "example": "awk -F, '{s[$2]+=$3} END {for(k in s) print k, s[k]}'",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk -v",
+      "meaning": "Pass a shell value into awk",
+      "example": "awk -v r=\"$ROLE\" '$3 == r' users.csv",
+      "topic": "Text"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "sed s///",
+      "problems": [
+        "d11p01",
+        "d11p05",
+        "d11p07"
+      ]
+    },
+    {
+      "item": "sed -i",
+      "problems": [
+        "d11p01"
+      ]
+    },
+    {
+      "item": "sed -n p",
+      "problems": [
+        "d11p02"
+      ]
+    },
+    {
+      "item": "Delete lines, ranges",
+      "problems": [
+        "d11p02"
+      ]
+    },
+    {
+      "item": "awk '{print $1}'",
+      "problems": [
+        "d11p03",
+        "d11p05"
+      ]
+    },
+    {
+      "item": "awk -F",
+      "problems": [
+        "d11p04",
+        "d11p05"
+      ]
+    },
+    {
+      "item": "NR, NF",
+      "problems": [
+        "d11p03",
+        "d11p06"
+      ]
+    },
+    {
+      "item": "Conditions",
+      "problems": [
+        "d11p03",
+        "d11p06"
+      ]
+    },
+    {
+      "item": "Sum, average, count",
+      "problems": [
+        "d11p03",
+        "d11p04"
+      ]
+    },
+    {
+      "item": "BEGIN / END",
+      "problems": [
+        "d11p03",
+        "d11p04"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day11"
+}

@@ -1,0 +1,689 @@
+{
+  "day": 8,
+  "week": 2,
+  "title": "Loops and arrays",
+  "goal": "Repeat work over servers, files and lines safely with for, while and until, and keep lists in arrays.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day08 && cd ~/bash-practice/day08",
+    "# P1: inventory file with comments, an empty line, and an END marker",
+    "printf '%s\\n' '# host,port,env' 'web-01,80,prod' 'web-02,80,prod' '' '# staging below' 'api-stg,8080,staging' 'END' 'old-01,22,retired' > inventory.csv",
+    "# P2: logs to loop over",
+    "mkdir -p logs",
+    "printf 'a\\nb\\n' > logs/api.log",
+    "printf 'a\\nb\\nc\\n' > logs/web.log",
+    "printf 'a\\n' > \"logs/worker 2.log\"",
+    "# P5: broken loop script, with a Windows path in the input",
+    "printf '%s\\n' 'C:\\Users\\wicky\\todo-app' '/var/log/todo' '  /opt/todo/config' > paths.txt",
+    "printf '%s\\n' '#!/bin/bash' '# Print the line count of every .log file in logs/,' '# then print each path in paths.txt exactly as written, and count them.' 'COUNT=0' 'for f in $(ls logs/*.log); do' '  echo \"$f: $(wc -l < \"$f\") lines\"' 'done' 'cat paths.txt | while read p; do' '  echo \"path: [$p]\"' '  COUNT=$((COUNT + 1))' 'done' 'echo \"paths read: $COUNT\"' > count-loop.sh",
+    "# P6: health check results",
+    "printf '%s\\n' 'web-01 OK' 'web-02 SKIP' 'web-03 OK' 'db-01 FAIL' 'db-02 OK' > results.txt",
+    "cd ~/bash-practice/day08"
+  ],
+  "warmup": [
+    {
+      "q": "What is the difference between `[ ]` and `[[ ]]` with an empty variable?",
+      "a": "`[ $x = a ]` fails with `unary operator expected`. `[[ $x = a ]]` works, because `[[ ]]` does not split variables.",
+      "from_day": 6
+    },
+    {
+      "q": "Which test checks that a file exists and is not empty?",
+      "a": "`[ -s file ]`",
+      "from_day": 6
+    },
+    {
+      "q": "What is wrong with `APP = todo`?",
+      "a": "Spaces around `=`. Bash runs `APP` as a command: `APP: command not found`. Write `APP=todo`.",
+      "from_day": 5
+    },
+    {
+      "q": "Which exit code means \"command not found\"?",
+      "a": "127. (126 = found but not executable.)",
+      "from_day": 6
+    }
+  ],
+  "problems": [
+    {
+      "id": "d08p01",
+      "title": "Read an inventory file line by line",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "An Ansible-style inventory `inventory.csv` lists servers as `host,port,env`. It has comment lines (`#`), an empty line, and an `END` marker; lines after `END` are retired servers. The user must print one line per real server.",
+      "task": [
+        "Read the file with `while IFS=, read -r host port env; do ... done < inventory.csv`.",
+        "Skip empty lines and lines that start with `#` (use `continue`).",
+        "Stop the loop at the line `END` (use `break`).",
+        "Print `HOST:PORT (ENV)` for each server, and a count at the end."
+      ],
+      "hints": [
+        "`IFS=,` splits each line at commas. `-r` keeps backslashes as they are.",
+        "Skip test: `[[ -z $host || $host == \\#* ]] && continue`.",
+        "Stop test: `[[ $host == END ]] && break`. Use `< inventory.csv` after `done`, not `cat |`."
+      ],
+      "solution": [
+        "COUNT=0",
+        "while IFS=, read -r host port env; do",
+        "  [[ -z $host || $host == \\#* ]] && continue   # empty line or comment",
+        "  [[ $host == END ]] && break                   # stop reading here",
+        "  echo \"$host:$port ($env)\"",
+        "  COUNT=$((COUNT + 1))",
+        "done < inventory.csv",
+        "echo \"servers: $COUNT\""
+      ],
+      "explanation": [
+        {
+          "part": "while IFS=, read -r a b c",
+          "meaning": "Read one line each time. `IFS=,` = split at commas, only for this `read`."
+        },
+        {
+          "part": "-r",
+          "meaning": "Raw: a backslash `\\` stays a backslash. Always use `-r`."
+        },
+        {
+          "part": "continue",
+          "meaning": "Skip the rest of this loop round and read the next line."
+        },
+        {
+          "part": "break",
+          "meaning": "Leave the loop completely."
+        },
+        {
+          "part": "\\#*",
+          "meaning": "A pattern for \"starts with #\". The `\\` stops `#` from starting a comment."
+        },
+        {
+          "part": "done < inventory.csv",
+          "meaning": "The loop reads from the file. The loop stays in the main shell, so `COUNT` keeps its value."
+        }
+      ],
+      "expected_output": "web-01:80 (prod)\nweb-02:80 (prod)\napi-stg:8080 (staging)\nservers: 3",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `for line in $(cat inventory.csv)`: it splits at every space and new line, not per line.",
+        "`cat inventory.csv | while read ...`: the loop runs in a subshell, so `COUNT` is 0 after the loop (see P5).",
+        "Forgetting the last line: if the file has no new line at the end, `read` fails on it. Use `while IFS=, read -r a b c || [[ -n $a ]]`."
+      ],
+      "interview_say": "To read a file line by line I use `while IFS= read -r line; do ...; done < file`. `-r` keeps backslashes, `IFS` controls splitting, and redirecting the file keeps variables in the main shell.",
+      "try_yourself": "Change the loop to collect only `prod` servers into one line: `web-01 web-02`."
+    },
+    {
+      "id": "d08p02",
+      "title": "Four kinds of for loops",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user needs loops for daily tasks: run a command on three web servers, retry a step 3 times, and count lines in every log file, even when a file name has a space.",
+      "task": [
+        "List loop: `for host in web-01 web-02 db-01; do echo \"ssh $host uptime\"; done` (dry run).",
+        "Brace range: loop over `web-{01..03}`.",
+        "C-style loop: `for ((i = 1; i <= 3; i++))` and print `attempt $i of 3`.",
+        "File loop: `for f in logs/*.log` and print the name and line count. Quote `\"$f\"`."
+      ],
+      "hints": [
+        "`{01..03}` keeps the leading zero: 01 02 03.",
+        "In `(( ))` no `$` is needed: `((i++))`.",
+        "Let bash expand the wildcard: `for f in logs/*.log`, never `$(ls logs/*.log)`."
+      ],
+      "solution": [
+        "for host in web-01 web-02 db-01; do",
+        "  echo \"ssh $host uptime\"            # dry run: print the command",
+        "done",
+        "for host in web-{01..03}; do echo \"check $host\"; done",
+        "for ((i = 1; i <= 3; i++)); do echo \"attempt $i of 3\"; done",
+        "for f in logs/*.log; do",
+        "  echo \"$f: $(wc -l < \"$f\") lines\"",
+        "done"
+      ],
+      "explanation": [
+        {
+          "part": "for x in a b c",
+          "meaning": "Run once for each word in the list."
+        },
+        {
+          "part": "web-{01..03}",
+          "meaning": "Brace range: web-01 web-02 web-03."
+        },
+        {
+          "part": "for ((i=1; i<=3; i++))",
+          "meaning": "C-style loop with a counter: start; condition; step."
+        },
+        {
+          "part": "for f in logs/*.log",
+          "meaning": "Bash expands the wildcard into file names. Names with spaces stay one item."
+        },
+        {
+          "part": "\"$f\"",
+          "meaning": "Quote the loop variable, or `worker 2.log` breaks into two words."
+        }
+      ],
+      "expected_output": "ssh web-01 uptime\nssh web-02 uptime\nssh db-01 uptime\ncheck web-01\ncheck web-02\ncheck web-03\nattempt 1 of 3\nattempt 2 of 3\nattempt 3 of 3\nlogs/api.log: 2 lines\nlogs/web.log: 3 lines\nlogs/worker 2.log: 1 lines",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`for i in {1..$N}` does not work: braces expand before variables. Use `for ((i = 1; i <= N; i++))` or `seq 1 \"$N\"`.",
+        "No match: if `logs/*.log` matches nothing, the loop runs once with the text `logs/*.log`. Check with `[ -e \"$f\" ] || continue`."
+      ],
+      "checks": [
+        {
+          "run": "N=3; for i in {1..$N}; do echo $i; done",
+          "expect": "{1..3}"
+        }
+      ],
+      "interview_say": "I use a list loop for hosts, a C-style loop for counters and retries, and a glob like `for f in *.log` for files, always quoting `\"$f\"` because names can have spaces.",
+      "try_yourself": "Run `N=3; for i in {1..$N}; do echo $i; done`. What prints? Why?"
+    },
+    {
+      "id": "d08p03",
+      "title": "until: wait for the database to be ready",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "In `docker compose`, the backend often starts before the database is ready and then crashes. A start script must wait until the database answers, but not forever: at most 5 tries.",
+      "task": [
+        "Use the given fake check `db_ready` (it succeeds on the 3rd call).",
+        "Write an `until db_ready; do ... done` loop that prints `waiting for db (try N)`.",
+        "Stop with an error message and `exit 1` after 5 tries.",
+        "After the loop, print `db is ready after N tries`."
+      ],
+      "hints": [
+        "`until CMD` loops while CMD fails. It is the opposite of `while CMD`.",
+        "Count with `TRY=$((TRY + 1))` and test `[ \"$TRY\" -ge 5 ]` inside the loop.",
+        "In real life use `sleep 2` between tries. Here `sleep 0.2` keeps it fast."
+      ],
+      "solution": [
+        "CALLS=0",
+        "db_ready() { CALLS=$((CALLS + 1)); [ \"$CALLS\" -ge 3 ]; }   # fake: ready on the 3rd call",
+        "TRY=1",
+        "until db_ready; do",
+        "  echo \"waiting for db (try $TRY)\"",
+        "  if [ \"$TRY\" -ge 5 ]; then echo \"db not ready after $TRY tries\" >&2; exit 1; fi",
+        "  TRY=$((TRY + 1))",
+        "  sleep 0.2",
+        "done",
+        "echo \"db is ready after $TRY tries\""
+      ],
+      "explanation": [
+        {
+          "part": "until cmd; do ...; done",
+          "meaning": "Repeat the body while `cmd` fails (exit code not 0)."
+        },
+        {
+          "part": "db_ready()",
+          "meaning": "A fake check. A real one could be `pg_isready -h db` or `nc -z db 5432`."
+        },
+        {
+          "part": "max tries + exit 1",
+          "meaning": "Never wait forever in automation. Fail clearly after a limit."
+        },
+        {
+          "part": "sleep 0.2",
+          "meaning": "Wait between tries so the loop does not use 100% CPU."
+        }
+      ],
+      "expected_output": "waiting for db (try 1)\nwaiting for db (try 2)\ndb is ready after 3 tries",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "No limit: an `until` loop without a counter can run forever and block the pipeline.",
+        "No `sleep`: the loop checks thousands of times per second and floods the logs."
+      ],
+      "interview_say": "I use `until check; do sleep 2; done` to wait for a dependency, always with a maximum number of tries and a clear error, so a pipeline never hangs forever.",
+      "try_yourself": "Change the fake check to succeed on the 7th call. What does the script print, and what is the exit code?"
+    },
+    {
+      "id": "d08p04",
+      "title": "Indexed and associative arrays",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A release script must build three Docker images (a list), and must know the port of each service (a name-to-number map). Bash has indexed arrays for lists and associative arrays for maps.",
+      "task": [
+        "Create `IMAGES=(todo-frontend todo-backend \"todo worker\")`. Print the count, the first item, and all items one per line.",
+        "Add `todo-cron` to the end with `+=`. Print the count again.",
+        "Create a map: `declare -A PORTS=([frontend]=80 [backend]=8080 [db]=5432)`.",
+        "Print the port of `backend`. Then loop over all keys (sorted) and print `key -> port`.",
+        "Check if the key `cache` exists."
+      ],
+      "hints": [
+        "`${#ARR[@]}` = count, `${ARR[0]}` = first item, `\"${ARR[@]}\"` = all items, each one separate.",
+        "Associative arrays need `declare -A`. `${!MAP[@]}` gives the keys.",
+        "Keys have no fixed order. Sort them: `printf '%s\\n' \"${!PORTS[@]}\" | sort`."
+      ],
+      "solution": [
+        "IMAGES=(todo-frontend todo-backend \"todo worker\")",
+        "echo \"count: ${#IMAGES[@]}, first: ${IMAGES[0]}\"",
+        "for img in \"${IMAGES[@]}\"; do echo \"build: $img\"; done",
+        "IMAGES+=(todo-cron)",
+        "echo \"count now: ${#IMAGES[@]}, last: ${IMAGES[-1]}\"",
+        "declare -A PORTS=([frontend]=80 [backend]=8080 [db]=5432)",
+        "echo \"backend port: ${PORTS[backend]}\"",
+        "for key in $(printf '%s\\n' \"${!PORTS[@]}\" | sort); do",
+        "  echo \"$key -> ${PORTS[$key]}\"",
+        "done",
+        "[[ -v PORTS[cache] ]] && echo \"cache is set\" || echo \"no port for cache\""
+      ],
+      "explanation": [
+        {
+          "part": "ARR=(a b \"c d\")",
+          "meaning": "Indexed array with 3 items. Quotes keep `c d` as one item."
+        },
+        {
+          "part": "${#ARR[@]} / ${ARR[0]} / ${ARR[-1]}",
+          "meaning": "Number of items / first item (index 0) / last item."
+        },
+        {
+          "part": "\"${ARR[@]}\"",
+          "meaning": "All items, each one as a separate word. Always quote it."
+        },
+        {
+          "part": "ARR+=(x)",
+          "meaning": "Add an item at the end."
+        },
+        {
+          "part": "declare -A MAP=([k]=v)",
+          "meaning": "Associative array: keys are names, not numbers."
+        },
+        {
+          "part": "${!MAP[@]}",
+          "meaning": "All keys. The order is random, so sort them for stable output."
+        },
+        {
+          "part": "[[ -v MAP[key] ]]",
+          "meaning": "True if the key exists."
+        }
+      ],
+      "expected_output": "count: 3, first: todo-frontend\nbuild: todo-frontend\nbuild: todo-backend\nbuild: todo worker\ncount now: 4, last: todo-cron\nbackend port: 8080\nbackend -> 8080\ndb -> 5432\nfrontend -> 80\nno port for cache",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`for img in ${IMAGES[@]}` without quotes splits `todo worker` into two images.",
+        "Forgetting `declare -A`: bash makes an indexed array, every key becomes 0, and only the last value stays.",
+        "Using `$IMAGES` alone: it gives only the first item."
+      ],
+      "checks": [
+        {
+          "run": "IMAGES=(a b \"todo worker\"); for i in ${IMAGES[@]}; do echo \"[$i]\"; done",
+          "expect": "[todo]"
+        }
+      ],
+      "interview_say": "I use indexed arrays for lists, like images to build, and `declare -A` maps for name-to-value data, like service ports. I always loop with `\"${arr[@]}\"` in quotes.",
+      "try_yourself": "Run `unset 'IMAGES[1]'` and print `${!IMAGES[@]}` (the indexes). Is index 1 gone? Is the count 3?"
+    },
+    {
+      "id": "d08p05",
+      "title": "Find the bug: the counting loop",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`count-loop.sh` should print the line count of every log, then each path from `paths.txt` exactly as written (one is a Windows path), and the number of paths. The output is wrong in three places.",
+      "task": [
+        "Run `bash count-loop.sh` and compare with the goal in the comments.",
+        "Find 3 bugs: the file loop, the `read` options, and the pipe into `while`.",
+        "Fix them and run again. The Windows path must keep its backslashes `\\`, and the third path must keep its 2 leading spaces."
+      ],
+      "hints": [
+        "`$(ls logs/*.log)` splits `worker 2.log` at the space.",
+        "Without `-r`, `read` eats backslashes. Without `IFS=`, it removes leading spaces.",
+        "`cat file | while ...` runs the loop in a subshell; COUNT is lost. Use `done < paths.txt`."
+      ],
+      "solution": [
+        "bash count-loop.sh",
+        "echo \"--- fixed ---\"",
+        "cat > count-loop.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Print the line count of every .log file in logs/,",
+        "# then print each path in paths.txt exactly as written, and count them.",
+        "COUNT=0",
+        "for f in logs/*.log; do                  # let bash expand the glob",
+        "  echo \"$f: $(wc -l < \"$f\") lines\"",
+        "done",
+        "while IFS= read -r p; do                 # IFS= keeps spaces, -r keeps backslashes",
+        "  echo \"path: [$p]\"",
+        "  COUNT=$((COUNT + 1))",
+        "done < paths.txt                         # no pipe: COUNT survives",
+        "echo \"paths read: $COUNT\"",
+        "EOF",
+        "bash count-loop.sh"
+      ],
+      "explanation": [
+        {
+          "part": "for f in logs/*.log",
+          "meaning": "Bug 1: `$(ls ...)` gave words, not names. `worker 2.log` became `logs/worker` and `2.log`."
+        },
+        {
+          "part": "IFS= read -r p",
+          "meaning": "Bug 2: `-r` keeps `\\`. `IFS=` (empty) keeps leading and trailing spaces."
+        },
+        {
+          "part": "done < paths.txt",
+          "meaning": "Bug 3: with `cat ... |`, the loop was a subshell, so `COUNT` was back to 0 after it."
+        }
+      ],
+      "expected_output": "logs/api.log: 2 lines\nlogs/web.log: 3 lines\ncount-loop.sh: line 6: logs/worker: No such file or directory\nlogs/worker:  lines\ncount-loop.sh: line 6: 2.log: No such file or directory\n2.log:  lines\npath: [C:Userswickytodo-app]\npath: [/var/log/todo]\npath: [/opt/todo/config]\npaths read: 0\n--- fixed ---\nlogs/api.log: 2 lines\nlogs/web.log: 3 lines\nlogs/worker 2.log: 1 lines\npath: [C:\\Users\\wicky\\todo-app]\npath: [/var/log/todo]\npath: [  /opt/todo/config]\npaths read: 3",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Thinking `C:Userswickytodo-app` is a typo in the file. It is `read` without `-r` removing the backslashes.",
+        "Moving `echo \"paths read\"` inside the loop to \"fix\" the count. The real fix is to remove the pipe."
+      ],
+      "checks": [
+        {
+          "run": "bash count-loop.sh",
+          "expect": "path: [C:Userswickytodo-app]"
+        },
+        {
+          "run": "bash count-loop.sh",
+          "expect": "paths read: 0"
+        }
+      ],
+      "interview_say": "The safe pattern is `while IFS= read -r line; do ...; done < file`. Looping over `$(ls)` breaks on spaces, and piping into `while` loses variables because of the subshell.",
+      "try_yourself": "Keep the pipe but add `shopt -s lastpipe` at the top of the script. Does COUNT work now? (It works in scripts, not in an interactive shell.)"
+    },
+    {
+      "id": "d08p06",
+      "title": "Stop at the first failure: break and continue",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A rolling deploy updates servers one by one. Servers marked `SKIP` are in maintenance. If one server returns `FAIL`, the deploy must stop at once so the other servers keep the old, working version.",
+      "task": [
+        "Read `results.txt` (`host status`) line by line.",
+        "`SKIP`: print `skip HOST` and `continue`.",
+        "`FAIL`: print `FAIL on HOST, stopping rollout`, and `break`.",
+        "`OK`: print `updated HOST`. After the loop, print how many servers were updated."
+      ],
+      "hints": [
+        "Use `case \"$status\" in ... esac` inside the loop.",
+        "`continue` jumps to the next line; `break` leaves the loop.",
+        "`db-02` must not be updated, because `db-01` failed before it."
+      ],
+      "solution": [
+        "UPDATED=0",
+        "while read -r host status; do",
+        "  case \"$status\" in",
+        "    SKIP) echo \"skip $host\"; continue ;;",
+        "    FAIL) echo \"FAIL on $host, stopping rollout\"; break ;;",
+        "    OK)   echo \"updated $host\"; UPDATED=$((UPDATED + 1)) ;;",
+        "  esac",
+        "done < results.txt",
+        "echo \"servers updated: $UPDATED\""
+      ],
+      "explanation": [
+        {
+          "part": "continue",
+          "meaning": "Go to the next loop round (next server)."
+        },
+        {
+          "part": "break",
+          "meaning": "Leave the loop. Lines after `db-01` are never read."
+        },
+        {
+          "part": "case inside while",
+          "meaning": "A common pattern: read a status, then decide."
+        }
+      ],
+      "expected_output": "updated web-01\nskip web-02\nupdated web-03\nFAIL on db-01, stopping rollout\nservers updated: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `exit` instead of `break`: the whole script ends and the summary line is never printed.",
+        "Using `break` in a nested loop and expecting both loops to end. Use `break 2` for two levels."
+      ],
+      "interview_say": "In a rolling update I loop over servers, `continue` for ones in maintenance, and `break` on the first failure so the rest keep the working version.",
+      "try_yourself": "Change `break` to `break 2` and wrap the `while` loop in `for round in 1 2; do ... done`. What changes?"
+    },
+    {
+      "id": "d08p07",
+      "title": "Loop over command output: mapfile and < <( )",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user wants to loop over the output of a command (for example a list of pods or files) and still keep counters after the loop. Two safe ways: `mapfile` into an array, or a loop that reads from `< <(command)`.",
+      "task": [
+        "Read the log file names into an array: `mapfile -t FILES < <(printf '%s\\n' logs/*.log)`.",
+        "Print how many files there are, and each one in brackets.",
+        "Count lines over all files with `while IFS= read -r f; do ... done < <(printf '%s\\n' logs/*.log)`.",
+        "Print the total after the loop."
+      ],
+      "hints": [
+        "`<(command)` is process substitution: bash gives the command output as a file.",
+        "`mapfile -t ARR` reads lines into an array; `-t` removes the new line at the end of each line.",
+        "The loop reads from `< <(...)`, so it runs in the main shell and `TOTAL` keeps its value."
+      ],
+      "solution": [
+        "mapfile -t FILES < <(printf '%s\\n' logs/*.log)",
+        "echo \"files: ${#FILES[@]}\"",
+        "for f in \"${FILES[@]}\"; do echo \"[$f]\"; done",
+        "TOTAL=0",
+        "while IFS= read -r f; do",
+        "  TOTAL=$((TOTAL + $(wc -l < \"$f\")))",
+        "done < <(printf '%s\\n' logs/*.log)",
+        "echo \"total lines: $TOTAL\""
+      ],
+      "explanation": [
+        {
+          "part": "<(cmd)",
+          "meaning": "Process substitution: the output of `cmd` looks like a file."
+        },
+        {
+          "part": "< <(cmd)",
+          "meaning": "Redirect that \"file\" into the loop. Note the space between `<` and `<(`."
+        },
+        {
+          "part": "mapfile -t ARR",
+          "meaning": "Read every line into the array ARR (also called `readarray`)."
+        }
+      ],
+      "expected_output": "files: 3\n[logs/api.log]\n[logs/web.log]\n[logs/worker 2.log]\ntotal lines: 6",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `<<(cmd)` without the space: `syntax error near unexpected token` (bash reads it as a here-doc).",
+        "Using `mapfile` in `sh`: it is a bash feature. Run the script with `bash`."
+      ],
+      "checks": [
+        {
+          "run": "printf 'while read x; do echo $x; done <<(echo hi)\\n' > t.sh; bash t.sh",
+          "expect": "syntax error near unexpected token"
+        }
+      ],
+      "interview_say": "To loop over command output without losing variables, I use `while IFS= read -r x; do ...; done < <(cmd)` or `mapfile -t arr < <(cmd)`.",
+      "try_yourself": "Use `mapfile -t LINES < inventory.csv` and print `${LINES[1]}`. Which line is it?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you read a file line by line in bash?",
+      "a": "`while IFS= read -r line; do ...; done < file`. `-r` keeps backslashes, `IFS=` keeps spaces, and the redirect keeps variables in the main shell.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Why is `for f in $(ls)` a bad idea?",
+      "a": "The output is split at spaces, so names with spaces break. Use a glob: `for f in *`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What is the difference between `break` and `continue`?",
+      "a": "`continue` skips to the next loop round. `break` leaves the loop completely.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you wait for a service in a script without hanging forever?",
+      "a": "An `until` (or `while`) loop with a check, a `sleep`, and a maximum number of tries that ends with `exit 1`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What is an associative array, and how do you create one?",
+      "a": "A map from names to values. `declare -A PORTS=([web]=80)`, then `${PORTS[web]}`. Keys: `${!PORTS[@]}`.",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "for x in a b c",
+      "meaning": "Loop over a list",
+      "example": "for h in web-{01..03}; do ...; done",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "for ((i=1; i<=N; i++))",
+      "meaning": "C-style counter loop",
+      "example": "for ((i=1; i<=3; i++)); do ...; done",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "for f in *.log",
+      "meaning": "Loop over files (safe with spaces)",
+      "example": "for f in logs/*.log; do wc -l \"$f\"; done",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "while IFS= read -r line",
+      "meaning": "Read a file line by line",
+      "example": "while IFS= read -r l; do ...; done < file",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "IFS=, read -r a b c",
+      "meaning": "Split a CSV line into variables",
+      "example": "while IFS=, read -r h p e; do ...",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "until cmd",
+      "meaning": "Loop while a command fails",
+      "example": "until nc -z db 5432; do sleep 2; done",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "break / continue",
+      "meaning": "Leave loop / skip to next round",
+      "example": "[[ $l == END ]] && break",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "ARR=(a b) / \"${ARR[@]}\"",
+      "meaning": "Indexed array / all items",
+      "example": "for i in \"${IMAGES[@]}\"; do ...",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "${#ARR[@]} / ARR+=(x)",
+      "meaning": "Array length / add item",
+      "example": "IMAGES+=(todo-cron)",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "declare -A",
+      "meaning": "Associative array (map)",
+      "example": "declare -A PORTS=([db]=5432)",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "${!MAP[@]}",
+      "meaning": "All keys of a map",
+      "example": "printf '%s\\n' \"${!PORTS[@]}\" | sort",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "mapfile -t",
+      "meaning": "Read lines into an array",
+      "example": "mapfile -t FILES < <(ls)",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "< <(cmd)",
+      "meaning": "Loop over command output, keep variables",
+      "example": "while read -r x; do ...; done < <(cmd)",
+      "topic": "Scripting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "for (list, C-style, files)",
+      "problems": [
+        "d08p02",
+        "d08p05"
+      ]
+    },
+    {
+      "item": "while",
+      "problems": [
+        "d08p01",
+        "d08p06"
+      ]
+    },
+    {
+      "item": "until",
+      "problems": [
+        "d08p03"
+      ]
+    },
+    {
+      "item": "while IFS= read -r",
+      "problems": [
+        "d08p01",
+        "d08p05",
+        "d08p07"
+      ]
+    },
+    {
+      "item": "break, continue",
+      "problems": [
+        "d08p01",
+        "d08p06"
+      ]
+    },
+    {
+      "item": "Indexed arrays",
+      "problems": [
+        "d08p04",
+        "d08p07"
+      ]
+    },
+    {
+      "item": "Associative arrays",
+      "problems": [
+        "d08p04"
+      ]
+    },
+    {
+      "item": "Looping over command output safely",
+      "problems": [
+        "d08p05",
+        "d08p07"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day08"
+}

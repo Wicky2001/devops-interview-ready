@@ -1,0 +1,755 @@
+{
+  "day": 19,
+  "week": 3,
+  "title": "SSH and file transfer",
+  "goal": "Create SSH keys with the right permissions, use an SSH config file, copy files safely with rsync, and debug common SSH errors.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day19 && cd ~/bash-practice/day19",
+    "# all keys and configs go into practice folders, NOT your real ~/.ssh",
+    "mkdir -p dot-ssh server-home",
+    "# P2: an SSH config file for the team servers",
+    "printf '%s\\n' 'Host bastion' '    HostName 203.0.113.10' '    User ec2-user' '    IdentityFile ~/bash-practice/day19/dot-ssh/id_todo' '' 'Host todo-prod' '    HostName 10.0.1.10' '    User deploy' '    Port 2222' '    IdentityFile ~/bash-practice/day19/dot-ssh/id_todo' '    ServerAliveInterval 30' '' 'Host *.todo.internal' '    User deploy' '    ProxyJump bastion' > dot-ssh/config",
+    "# P4/P5: a build folder to copy",
+    "mkdir -p build/css build/js",
+    "echo '<h1>Todo v2</h1>' > build/index.html",
+    "echo 'body { margin: 0 }' > build/css/app.css",
+    "echo 'console.log(\"todo\")' > build/js/app.js",
+    "echo 'API_KEY=change-me' > build/.env",
+    "cp -r build site-build          # P5 has its own copy",
+    "printf '%s\\n' '#!/bin/bash' '# Copy the CONTENTS of site-build/ into release/ (not a site-build/ folder inside release/).' '# Never copy .env files. Show a dry run first, then copy for real.' 'rsync -av site-build release/' > deploy-copy.sh",
+    "cd ~/bash-practice/day19"
+  ],
+  "warmup": [
+    {
+      "q": "Which command shows which process listens on port 8080?",
+      "a": "`sudo ss -ltnp | grep :8080` (or `sudo lsof -i :8080`).",
+      "from_day": 18
+    },
+    {
+      "q": "What does curl exit code 7 mean? And 28?",
+      "a": "7 = could not connect. 28 = timeout.",
+      "from_day": 18
+    },
+    {
+      "q": "What permission must a private key or `.env` file have?",
+      "a": "600 (only the owner can read and write).",
+      "from_day": 3
+    },
+    {
+      "q": "Why can root still read a 600 file of another user?",
+      "a": "Root ignores read and write permissions. 600 protects only from other normal users.",
+      "from_day": 3
+    }
+  ],
+  "problems": [
+    {
+      "id": "d19p01",
+      "title": "Create a key pair with the right permissions",
+      "type": "command",
+      "topic": "SSH",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The user needs a new SSH key to log in to the to-do servers and for Jenkins to deploy. SSH refuses keys and folders with loose permissions, so the user creates an ed25519 key in the practice folder and sets 700 / 600 / 644.",
+      "task": [
+        "Create a key with no passphrase (for practice only): `ssh-keygen -q -t ed25519 -N '' -C 'wicky@laptop' -f dot-ssh/id_todo`.",
+        "List the two files and show their permissions with `stat -c '%a %n'`.",
+        "Set the folder to 700, the private key to 600, the public key to 644. Show them again.",
+        "Show the start of the public key and its fingerprint type with `ssh-keygen -l`."
+      ],
+      "hints": [
+        "The private key has no extension; the public key ends in `.pub`. Only the `.pub` file is ever shared.",
+        "700 = only the owner can enter the folder. 600 = only the owner can read the key.",
+        "`ssh-keygen -l -f key.pub` prints bits, fingerprint, comment and type."
+      ],
+      "solution": [
+        "ssh-keygen -q -t ed25519 -N '' -C 'wicky@laptop' -f dot-ssh/id_todo",
+        "ls dot-ssh",
+        "stat -c '%a %n' dot-ssh dot-ssh/id_todo dot-ssh/id_todo.pub",
+        "chmod 700 dot-ssh",
+        "chmod 600 dot-ssh/id_todo",
+        "chmod 644 dot-ssh/id_todo.pub",
+        "stat -c '%a %n' dot-ssh dot-ssh/id_todo dot-ssh/id_todo.pub",
+        "cut -c1-25 dot-ssh/id_todo.pub",
+        "ssh-keygen -l -f dot-ssh/id_todo.pub | awk '{print $1, $3, $4}'"
+      ],
+      "explanation": [
+        {
+          "part": "-t ed25519",
+          "meaning": "Modern, short and fast key type. Use RSA 4096 only for very old servers."
+        },
+        {
+          "part": "-N ''",
+          "meaning": "Empty passphrase. Fine for practice and some automation; for a personal key, use a passphrase plus ssh-agent."
+        },
+        {
+          "part": "-C 'wicky@laptop'",
+          "meaning": "A comment, so people know whose key it is."
+        },
+        {
+          "part": "700 / 600 / 644",
+          "meaning": "Folder only for the owner / private key only for the owner / public key readable."
+        },
+        {
+          "part": "ssh-keygen -l",
+          "meaning": "Fingerprint: a short id of the key, to compare with what the server shows."
+        },
+        {
+          "part": "ssh-copy-id user@server",
+          "meaning": "On a real server: adds the user's `.pub` key to the server's `~/.ssh/authorized_keys`."
+        }
+      ],
+      "expected_output": "config\tid_todo  id_todo.pub\n755 dot-ssh\n600 dot-ssh/id_todo\n644 dot-ssh/id_todo.pub\n700 dot-ssh\n600 dot-ssh/id_todo\n644 dot-ssh/id_todo.pub\nssh-ed25519 AAAAC3NzaC1lZ\n256 wicky@laptop (ED25519)",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "The real key text and fingerprint are random, so only the fixed parts are printed. On a normal machine, the default key path is `~/.ssh/id_ed25519`.",
+      "verified": true,
+      "mistakes": [
+        "Sending the private key (without `.pub`) to someone. Never share it; send only the `.pub` file.",
+        "Running `ssh-keygen` with the default path when `~/.ssh/id_ed25519` exists: it asks to overwrite. Answering `y` loses the old key.",
+        "Committing keys or `.env` files to git. Add them to `.gitignore`."
+      ],
+      "interview_say": "I create keys with `ssh-keygen -t ed25519`, share only the `.pub` file, and keep `~/.ssh` at 700 and the private key at 600, otherwise SSH refuses to use it.",
+      "try_yourself": "Create a second key with a passphrase: `ssh-keygen -t ed25519 -f dot-ssh/id_pass`. Then load it with ssh-agent (Extra E1)."
+    },
+    {
+      "id": "d19p02",
+      "title": "~/.ssh/config: short names for servers",
+      "type": "command",
+      "topic": "SSH",
+      "minutes": 12,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The user types `ssh -i ~/keys/id_todo -p 2222 deploy@10.0.1.10` many times a day. An SSH config file gives each server a short name. Private servers behind a bastion (jump host) can be reached in one step with `ProxyJump`.",
+      "task": [
+        "Read `dot-ssh/config`.",
+        "Show what `ssh todo-prod` would use, without connecting: `ssh -G -F dot-ssh/config todo-prod`, filtered to hostname, user, port and identityfile.",
+        "Do the same for `api.todo.internal`. Which jump host is used?",
+        "Write down the full command you no longer need to type."
+      ],
+      "hints": [
+        "`-F FILE` = use this config file instead of `~/.ssh/config`. `-G` = print the final settings and exit.",
+        "`Host *.todo.internal` is a pattern: it matches every name ending in `.todo.internal`.",
+        "`grep -E '^(hostname|user|port|identityfile|proxyjump) '`"
+      ],
+      "solution": [
+        "cat dot-ssh/config",
+        "echo \"=== ssh todo-prod would use ===\"",
+        "ssh -G -F dot-ssh/config todo-prod | grep -E '^(hostname|user|port|identityfile|serveraliveinterval) '",
+        "echo \"=== ssh api.todo.internal would use ===\"",
+        "ssh -G -F dot-ssh/config api.todo.internal | grep -E '^(hostname|user|port|proxyjump) '"
+      ],
+      "explanation": [
+        {
+          "part": "Host todo-prod",
+          "meaning": "The short name the user types: `ssh todo-prod`."
+        },
+        {
+          "part": "HostName / User / Port / IdentityFile",
+          "meaning": "Real address, login user, port and key for that name."
+        },
+        {
+          "part": "ServerAliveInterval 30",
+          "meaning": "Send a keep-alive every 30 s so idle connections are not cut."
+        },
+        {
+          "part": "Host *.todo.internal + ProxyJump bastion",
+          "meaning": "For every internal name, go through the bastion first (same as `ssh -J bastion host`)."
+        },
+        {
+          "part": "ssh -G",
+          "meaning": "Print the settings ssh would use. Great for debugging configs; it does not connect."
+        }
+      ],
+      "expected_output": "Host bastion\n    HostName 203.0.113.10\n    User ec2-user\n    IdentityFile ~/bash-practice/day19/dot-ssh/id_todo\n\nHost todo-prod\n    HostName 10.0.1.10\n    User deploy\n    Port 2222\n    IdentityFile ~/bash-practice/day19/dot-ssh/id_todo\n    ServerAliveInterval 30\n\nHost *.todo.internal\n    User deploy\n    ProxyJump bastion\n=== ssh todo-prod would use ===\nuser deploy\nhostname 10.0.1.10\nport 2222\nserveraliveinterval 30\nidentityfile ~/bash-practice/day19/dot-ssh/id_todo\n=== ssh api.todo.internal would use ===\nuser deploy\nhostname api.todo.internal\nport 22\nproxyjump bastion",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Wrong permissions on `~/.ssh/config`: `Bad owner or permissions on /home/wicky/.ssh/config`. Use `chmod 600 ~/.ssh/config`.",
+        "Putting `Host *` with settings at the top: the first value found wins, so later host blocks cannot override it. Put `Host *` at the end."
+      ],
+      "interview_say": "I keep servers in `~/.ssh/config` with HostName, User, Port and IdentityFile, and use `ProxyJump` for private servers behind a bastion. `ssh -G host` shows what will be used.",
+      "try_yourself": "Add a `Host todo-staging` block with `HostName 10.0.2.10` and `User deploy`, then check it with `ssh -G`."
+    },
+    {
+      "id": "d19p03",
+      "title": "Explain the error: UNPROTECTED PRIVATE KEY FILE",
+      "type": "explain-error",
+      "topic": "SSH",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate copied the deploy key from Windows to WSL, and SSH says `WARNING: UNPROTECTED PRIVATE KEY FILE!` and `bad permissions`. The user reproduces the error, fixes it, and also prepares the server side: `authorized_keys` with the right permissions.",
+      "task": [
+        "Create a key in `dot-ssh/team_key` (like P1). Set it to 644 by mistake.",
+        "Try to read it: `ssh-keygen -y -f dot-ssh/team_key`. Read the whole error.",
+        "Fix the permission and try again (print only the key type).",
+        "Prepare the server side in `server-home`: create `.ssh/authorized_keys` with the public key, folder 700, file 600."
+      ],
+      "hints": [
+        "SSH ignores private keys that other users can read: 644 is \"too open\".",
+        "`ssh-keygen -y -f KEY` prints the public key from a private key.",
+        "On the server: `~/.ssh` = 700, `~/.ssh/authorized_keys` = 600, and the home folder must not be writable by others."
+      ],
+      "solution": [
+        "ssh-keygen -q -t ed25519 -N '' -C 'deploy@jenkins' -f dot-ssh/team_key",
+        "chmod 644 dot-ssh/team_key                       # the mistake",
+        "ssh-keygen -y -f dot-ssh/team_key || echo \"exit code: $?\"",
+        "chmod 600 dot-ssh/team_key                       # the fix",
+        "ssh-keygen -y -f dot-ssh/team_key | cut -d' ' -f1",
+        "mkdir -p server-home/.ssh",
+        "cat dot-ssh/team_key.pub >> server-home/.ssh/authorized_keys",
+        "chmod 700 server-home/.ssh",
+        "chmod 600 server-home/.ssh/authorized_keys",
+        "stat -c '%a %n' server-home/.ssh server-home/.ssh/authorized_keys",
+        "awk '{print $1, $3}' server-home/.ssh/authorized_keys"
+      ],
+      "explanation": [
+        {
+          "part": "UNPROTECTED PRIVATE KEY FILE",
+          "meaning": "The key is readable by group or others (0644). SSH ignores it: `Load key ...: bad permissions`."
+        },
+        {
+          "part": "exit code 255",
+          "meaning": "SSH tools use 255 for their own errors."
+        },
+        {
+          "part": "authorized_keys",
+          "meaning": "On the server: one public key per line. A user can log in with any matching private key."
+        },
+        {
+          "part": "700 / 600 on the server",
+          "meaning": "sshd (with StrictModes) refuses keys if `~/.ssh` or `authorized_keys` can be written by others."
+        },
+        {
+          "part": "Windows copy",
+          "meaning": "Files under `/mnt/c/...` often show as 777. Copy keys into the Linux home (`~/.ssh`) and chmod there."
+        }
+      ],
+      "expected_output": "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nPermissions 0644 for 'dot-ssh/team_key' are too open.\nIt is required that your private key files are NOT accessible by others.\nThis private key will be ignored.\nLoad key \"dot-ssh/team_key\": bad permissions\nexit code: 255\nssh-ed25519\n700 server-home/.ssh\n600 server-home/.ssh/authorized_keys\nssh-ed25519 deploy@jenkins",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Fixing it with `chmod 400` on the folder: then SSH cannot read anything inside. Folder 700, key 600 (or 400).",
+        "Pasting a public key into `authorized_keys` with a line break in the middle: the key does not match. One key = one line."
+      ],
+      "interview_say": "SSH refuses a private key that others can read, so it must be 600. On the server, `~/.ssh` must be 700 and `authorized_keys` 600; otherwise key login fails and falls back to password or `Permission denied (publickey)`.",
+      "try_yourself": "Add the option `from=\"10.0.0.0/8\"` before the key in `authorized_keys`. What does it allow and block?"
+    },
+    {
+      "id": "d19p04",
+      "title": "rsync -avz --dry-run (and scp)",
+      "type": "command",
+      "topic": "SSH",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user copies the frontend build to the web server. `scp` copies everything every time; `rsync` copies only changes and can show what it would do first. Here the target is a local folder, so no server is needed; the commands are the same with `user@host:/path`.",
+      "task": [
+        "Dry run: `rsync -avz --dry-run build/ web-root/`. Read the file list.",
+        "Copy for real. Then run the same command again: what is copied the second time?",
+        "Delete `build/js/app.js`, then dry run with `--delete`. What would be removed on the target?",
+        "Copy one file with `scp build/index.html backup-index.html` (scp also works locally)."
+      ],
+      "hints": [
+        "`-a` archive (keep times, permissions, folders), `-v` verbose, `-z` compress during transfer.",
+        "The trailing `/` on `build/` means \"the contents of build\". Without it, rsync creates `web-root/build/`.",
+        "`--delete` removes files on the target that are not in the source. Always dry-run it first."
+      ],
+      "solution": [
+        "rsync -avz --dry-run build/ web-root/ | grep -Ev '^(sent|total size) '",
+        "rsync -az build/ web-root/",
+        "echo \"=== second run: only changes ===\"",
+        "rsync -avz build/ web-root/ | grep -Ev '^(sent|total size) '",
+        "sleep 1                                   # so the folder time really changes",
+        "rm build/js/app.js",
+        "echo \"=== --delete dry run ===\"",
+        "rsync -avz --delete --dry-run build/ web-root/ | grep -Ev '^(sent|total size) '",
+        "scp build/index.html backup-index.html && cat backup-index.html"
+      ],
+      "explanation": [
+        {
+          "part": "-a",
+          "meaning": "Archive: recursive, keep permissions, times, symlinks."
+        },
+        {
+          "part": "-v / -z",
+          "meaning": "List files / compress data on the network."
+        },
+        {
+          "part": "--dry-run (-n)",
+          "meaning": "Show what would happen, change nothing."
+        },
+        {
+          "part": "build/ (with slash)",
+          "meaning": "Copy the contents. `build` (no slash) copies the folder itself."
+        },
+        {
+          "part": "second run",
+          "meaning": "Nothing listed: rsync compares size and time and skips files that did not change."
+        },
+        {
+          "part": "--delete",
+          "meaning": "Make the target an exact mirror: `deleting js/app.js`. The `js/` line means: the folder's time changed, so rsync updates it."
+        },
+        {
+          "part": "| grep -Ev '^(sent|total size) '",
+          "meaning": "Hide the two summary lines (bytes, speed, speedup). They change a little on every run."
+        }
+      ],
+      "expected_output": "sending incremental file list\ncreated directory web-root\n./\n.env\nindex.html\ncss/\ncss/app.css\njs/\njs/app.js\n\n=== second run: only changes ===\nsending incremental file list\n\n=== --delete dry run ===\nsending incremental file list\ndeleting js/app.js\njs/\n\n<h1>Todo v2</h1>",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`rsync --delete` with the wrong target folder (for example `/var/www` instead of `/var/www/todo`): it deletes everything else there. Dry run first, always.",
+        "Mixing up the order: `rsync dest/ src/` copies in the wrong direction. The source comes first, like `cp`."
+      ],
+      "interview_say": "I use `rsync -avz --dry-run src/ user@host:/dest/` first, then without `--dry-run`. rsync copies only changes, and `--delete` mirrors the folder. The trailing slash on the source means \"copy the contents\".",
+      "try_yourself": "Run `rsync -avz --dry-run --exclude '*.css' build/ web-root/`. Which files are left out?"
+    },
+    {
+      "id": "d19p05",
+      "title": "Find the bug: the deploy-copy script",
+      "type": "fix-bug",
+      "topic": "SSH",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`deploy-copy.sh` copied the build to the server. Now the site is at `/release/site-build/index.html` instead of `/release/index.html`, and the secret `.env` file is public on the web server.",
+      "task": [
+        "Run `bash deploy-copy.sh`, then `find release | sort`. Compare with the comments in the script.",
+        "Find 3 problems: the trailing slash, the missing exclude, and no dry run.",
+        "Delete `release`, fix the script, and run it. Check with `find release | sort`."
+      ],
+      "hints": [
+        "`rsync -av site-build release/` copies the folder `site-build` itself into release.",
+        "`--exclude '.env'` (or `--exclude '*.env'`) keeps secrets out.",
+        "First `rsync -av --dry-run ...`, then the real command."
+      ],
+      "solution": [
+        "bash deploy-copy.sh | grep -Ev '^(sent|total size) '",
+        "find release | sort",
+        "rm -rf release",
+        "cat > deploy-copy.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Copy the CONTENTS of site-build/ into release/ (not a site-build/ folder inside release/).",
+        "# Never copy .env files. Show a dry run first, then copy for real.",
+        "set -e",
+        "OPTS=(-av --exclude '.env')",
+        "echo \"=== dry run ===\"",
+        "rsync \"${OPTS[@]}\" --dry-run site-build/ release/ | grep -Ev '^(sent|total size) '",
+        "echo \"=== copy ===\"",
+        "rsync \"${OPTS[@]}\" site-build/ release/ | grep -Ev '^(sent|total size) '",
+        "EOF",
+        "bash deploy-copy.sh",
+        "find release | sort"
+      ],
+      "explanation": [
+        {
+          "part": "site-build/ release/",
+          "meaning": "Bug 1: the slash after `site-build` copies the contents, not the folder."
+        },
+        {
+          "part": "--exclude '.env'",
+          "meaning": "Bug 2: secrets must never reach a web root."
+        },
+        {
+          "part": "--dry-run step",
+          "meaning": "Bug 3: the goal said \"dry run first\"."
+        },
+        {
+          "part": "OPTS=(...)",
+          "meaning": "An array keeps the options the same for both runs (Day 8)."
+        },
+        {
+          "part": "set -e",
+          "meaning": "Stop if a command fails (Day 22)."
+        }
+      ],
+      "expected_output": "sending incremental file list\ncreated directory release\nsite-build/\nsite-build/.env\nsite-build/index.html\nsite-build/css/\nsite-build/css/app.css\nsite-build/js/\nsite-build/js/app.js\n\nrelease\nrelease/site-build\nrelease/site-build/.env\nrelease/site-build/css\nrelease/site-build/css/app.css\nrelease/site-build/index.html\nrelease/site-build/js\nrelease/site-build/js/app.js\n=== dry run ===\nsending incremental file list\ncreated directory release\n./\nindex.html\ncss/\ncss/app.css\njs/\njs/app.js\n\n=== copy ===\nsending incremental file list\ncreated directory release\n./\nindex.html\ncss/\ncss/app.css\njs/\njs/app.js\n\nrelease\nrelease/css\nrelease/css/app.css\nrelease/index.html\nrelease/js\nrelease/js/app.js",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Excluding with a full path from the wrong level: `--exclude site-build/.env` does not match when the source is `site-build/`. Patterns are relative to the source.",
+        "Fixing the slash but leaving the old `release/site-build/` folder on the server. Clean up or use `--delete` (after a dry run)."
+      ],
+      "interview_say": "When I deploy files with rsync I watch the trailing slash, exclude secrets like `.env`, and always look at a `--dry-run` first.",
+      "try_yourself": "Add `--delete` to `OPTS` and create an extra file `release/old.html`. Does the dry run show it as deleted?"
+    },
+    {
+      "id": "d19p06",
+      "title": "ssh-agent: type the passphrase once",
+      "type": "command",
+      "topic": "SSH",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user's real key has a passphrase (good security), but typing it for every `git pull` and `ssh` is slow. `ssh-agent` keeps the unlocked key in memory for this session.",
+      "task": [
+        "Create a practice key `dot-ssh/agent_key` (no passphrase here, for speed).",
+        "Start an agent: `eval \"$(ssh-agent -s)\"`. Check that `SSH_AUTH_SOCK` is set.",
+        "Add the key with `ssh-add` and list keys with `ssh-add -l`.",
+        "Stop the agent with `ssh-agent -k`."
+      ],
+      "hints": [
+        "`ssh-agent -s` prints shell commands; `eval` runs them to set the variables.",
+        "`ssh-add -l` lists the loaded keys; `ssh-add -D` removes all.",
+        "`ssh -A` (agent forwarding) lets a server use the user's agent: only use it with trusted servers."
+      ],
+      "solution": [
+        "ssh-keygen -q -t ed25519 -N '' -C 'wicky@laptop' -f dot-ssh/agent_key",
+        "eval \"$(ssh-agent -s)\" > /dev/null",
+        "[ -n \"$SSH_AUTH_SOCK\" ] && echo \"agent is running\"",
+        "ssh-add dot-ssh/agent_key",
+        "ssh-add -l | awk '{print $1, $3, $4}'",
+        "ssh-agent -k > /dev/null && echo \"agent stopped\""
+      ],
+      "explanation": [
+        {
+          "part": "eval \"$(ssh-agent -s)\"",
+          "meaning": "Start the agent and set `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in this shell."
+        },
+        {
+          "part": "ssh-add KEY",
+          "meaning": "Unlock the key once (asks for the passphrase) and keep it in the agent."
+        },
+        {
+          "part": "ssh-add -l",
+          "meaning": "List keys: bits, fingerprint, comment, type."
+        },
+        {
+          "part": "ssh-agent -k",
+          "meaning": "Kill this agent."
+        }
+      ],
+      "expected_output": "agent is running\nIdentity added: dot-ssh/agent_key (wicky@laptop)\n256 wicky@laptop (ED25519)\nagent stopped",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`ssh-add` without a running agent: `Could not open a connection to your authentication agent.` Start it with `eval \"$(ssh-agent -s)\"`."
+      ],
+      "checks": [
+        {
+          "run": "ssh-keygen -q -t ed25519 -N '' -f k; env -u SSH_AUTH_SOCK ssh-add k",
+          "expect": "Could not open a connection to your authentication agent."
+        }
+      ],
+      "interview_say": "I protect my key with a passphrase and load it once per session with `ssh-agent` and `ssh-add`. I avoid agent forwarding to servers I do not trust.",
+      "try_yourself": "Run `ssh-add -t 3600 dot-ssh/agent_key` to keep the key for one hour only."
+    },
+    {
+      "id": "d19p07",
+      "title": "SSH tunnel: reach a private database (needs a server)",
+      "type": "concept",
+      "topic": "SSH",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The RDS database of the vehicle parts system is in a private subnet. Only the bastion can reach it. An SSH local tunnel (`-L`) opens a port on the laptop that forwards through the bastion to the database. This needs real servers, so it is not run in the sandbox.",
+      "task": [
+        "Read the command: `ssh -N -L 5433:parts-db.internal:5432 bastion`.",
+        "In a second terminal, connect to `localhost:5433` as if the database were local: `psql -h localhost -p 5433 -U app parts`.",
+        "Check the tunnel port on the laptop with `ss -ltn 'sport = :5433'`.",
+        "Stop the tunnel with Ctrl+C."
+      ],
+      "hints": [
+        "`-L LOCALPORT:TARGETHOST:TARGETPORT` — the target host is resolved by the bastion, not by the laptop.",
+        "`-N` = do not run a remote command, only forward.",
+        "`-R` is the opposite (remote forward); `-D` makes a SOCKS proxy."
+      ],
+      "solution": [
+        "ssh -N -L 5433:parts-db.internal:5432 bastion &",
+        "sleep 2",
+        "ss -ltn 'sport = :5433'",
+        "psql -h localhost -p 5433 -U app parts -c 'select count(*) from parts;'",
+        "kill %1"
+      ],
+      "explanation": [
+        {
+          "part": "-L 5433:parts-db.internal:5432",
+          "meaning": "Listen on laptop port 5433; send traffic through SSH to parts-db.internal:5432."
+        },
+        {
+          "part": "bastion",
+          "meaning": "Host name from `~/.ssh/config` (P2)."
+        },
+        {
+          "part": "-N",
+          "meaning": "Only the tunnel, no shell."
+        },
+        {
+          "part": "localhost:5433",
+          "meaning": "Programs on the laptop connect here."
+        }
+      ],
+      "expected_output": "",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "Typical output; the row count is example data. The tunnel needs a reachable bastion and database.",
+      "verified": false,
+      "typical_output": "State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\nLISTEN 0      128        127.0.0.1:5433      0.0.0.0:*\n count\n-------\n  1284\n(1 row)",
+      "mistakes": [
+        "`bind [127.0.0.1]:5433: Address already in use`: a tunnel or local Postgres already uses 5433. Pick another local port.",
+        "Leaving tunnels open in the background after work. Stop them, or use `ssh -O exit` with ControlMaster."
+      ],
+      "interview_say": "To reach a private database I use an SSH local forward through a bastion: `ssh -N -L 5433:db:5432 bastion`, then connect to localhost:5433. In AWS, SSM Session Manager port forwarding is an option without open SSH ports.",
+      "try_yourself": "Write the `LocalForward 5433 parts-db.internal:5432` line into a `Host db-tunnel` block in `dot-ssh/config`."
+    },
+    {
+      "id": "d19p08",
+      "title": "Debug SSH errors: refused, timeout, permission denied",
+      "type": "concept",
+      "topic": "SSH",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "\"I cannot SSH to the server\" can mean very different problems. The exact error shows where to look. The user creates one real error (connection refused to a closed local port) and learns the others with a table.",
+      "task": [
+        "Try `ssh -o BatchMode=yes -o ConnectTimeout=3 -p 2222 127.0.0.1` (nothing listens on 2222). Read the error and exit code.",
+        "Check the port with `nc -zv 127.0.0.1 2222`.",
+        "Read the table: which error points to the network, the server, or the key?"
+      ],
+      "hints": [
+        "`BatchMode=yes` = never ask for a password, fail instead (good in scripts).",
+        "`Connection refused` = the host answered, but nothing listens on that port.",
+        "`ssh -v` (or `-vvv`) prints each step: which key is offered, what the server answers."
+      ],
+      "solution": [
+        "ssh -o BatchMode=yes -o ConnectTimeout=3 -p 2222 127.0.0.1 true; echo \"ssh exit code: $?\"",
+        "nc -zv -w 2 127.0.0.1 2222; echo \"nc exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "Connection refused",
+          "meaning": "The server is reachable, but sshd is not running or listens on another port."
+        },
+        {
+          "part": "exit code 255",
+          "meaning": "ssh's own error (not the remote command's exit code)."
+        },
+        {
+          "part": "nc -zv",
+          "meaning": "Confirms the port is closed, without SSH."
+        }
+      ],
+      "expected_output": "ssh: connect to host 127.0.0.1 port 2222: Connection refused\nssh exit code: 255\nnc: connect to 127.0.0.1 port 2222 (tcp) failed: Connection refused\nnc exit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Deleting `~/.ssh/known_hosts` completely after `Host key verification failed`. Remove only that host with `ssh-keygen -R host`, after confirming the change is expected."
+      ],
+      "interview_say": "I read the exact SSH error: refused means nothing listens, timeout means network or firewall, `Permission denied (publickey)` means key, user or permissions. Then I use `ssh -v` to see each step.",
+      "try_yourself": "Run `ssh -v -o BatchMode=yes -p 2222 127.0.0.1 2>&1 | head -n 5` and read the first debug lines.",
+      "table": {
+        "head": [
+          "Error",
+          "Usual cause",
+          "Check"
+        ],
+        "rows": [
+          [
+            "`Connection refused`",
+            "sshd down or wrong port",
+            "`systemctl status ssh`, `ss -ltn` on the server"
+          ],
+          [
+            "`Connection timed out`",
+            "firewall / security group / wrong IP",
+            "security group rules, `nc -zv host 22`"
+          ],
+          [
+            "`Permission denied (publickey)`",
+            "wrong key, wrong user, bad permissions",
+            "`ssh -v`, `-i key`, `ls -ld ~/.ssh`"
+          ],
+          [
+            "`Host key verification failed`",
+            "server key changed (rebuilt, or attack)",
+            "confirm, then `ssh-keygen -R host`"
+          ],
+          [
+            "`Could not resolve hostname`",
+            "DNS or typo",
+            "`getent hosts name`"
+          ]
+        ]
+      }
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you set up key-based SSH login?",
+      "a": "Create a key with `ssh-keygen -t ed25519`, copy the public key to the server with `ssh-copy-id user@host` (it goes into `~/.ssh/authorized_keys`), then log in with the private key.",
+      "topic": "SSH"
+    },
+    {
+      "q": "What permissions do `~/.ssh`, the private key and `authorized_keys` need?",
+      "a": "`~/.ssh` 700, the private key 600, `authorized_keys` 600 (public keys 644). SSH refuses looser permissions.",
+      "topic": "SSH"
+    },
+    {
+      "q": "What is the difference between scp and rsync?",
+      "a": "scp always copies whole files. rsync copies only changes, can resume, can `--delete` to mirror, and has `--dry-run`.",
+      "topic": "SSH"
+    },
+    {
+      "q": "What is a bastion (jump host), and how do you use it?",
+      "a": "A hardened server in a public subnet used to reach private servers. `ssh -J bastion private-host`, or `ProxyJump bastion` in `~/.ssh/config`.",
+      "topic": "SSH"
+    },
+    {
+      "q": "What does `ssh -L 5433:db:5432 bastion` do?",
+      "a": "It opens port 5433 on my machine and forwards it through the bastion to db:5432, so I can reach a private database at localhost:5433.",
+      "topic": "SSH"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "ssh-keygen -t ed25519 -C",
+      "meaning": "Create a key pair",
+      "example": "ssh-keygen -t ed25519 -C 'wicky@laptop'",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "ssh-copy-id user@host",
+      "meaning": "Install your public key on a server",
+      "example": "ssh-copy-id deploy@10.0.1.10",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "chmod 700 ~/.ssh; chmod 600 key",
+      "meaning": "Permissions SSH requires",
+      "example": "chmod 600 ~/.ssh/id_ed25519",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "~/.ssh/config Host blocks",
+      "meaning": "Short names, user, port, key, ProxyJump",
+      "example": "ssh todo-prod",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "ssh -G host",
+      "meaning": "Show the settings ssh will use",
+      "example": "ssh -G todo-prod | grep hostname",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "ssh -J bastion host",
+      "meaning": "Jump through a bastion",
+      "example": "ssh -J bastion deploy@10.0.1.10",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "ssh -v",
+      "meaning": "Debug the connection steps",
+      "example": "ssh -v todo-prod",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "ssh-keygen -R host",
+      "meaning": "Remove one host from known_hosts",
+      "example": "ssh-keygen -R 10.0.1.10",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "rsync -avz --dry-run src/ dst/",
+      "meaning": "Preview a sync (slash = contents)",
+      "example": "rsync -avz --dry-run build/ deploy@web:/var/www/todo/",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "rsync --delete / --exclude",
+      "meaning": "Mirror / leave files out",
+      "example": "rsync -av --exclude '.env' build/ dst/",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "scp file user@host:/path",
+      "meaning": "Copy a file over SSH",
+      "example": "scp app.jar deploy@web:/opt/todo/",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "eval \"$(ssh-agent -s)\"; ssh-add",
+      "meaning": "Load a key into the agent",
+      "example": "ssh-add ~/.ssh/id_ed25519",
+      "topic": "SSH"
+    },
+    {
+      "cmd": "ssh -N -L lport:host:port",
+      "meaning": "Local port forward (tunnel)",
+      "example": "ssh -N -L 5433:db:5432 bastion",
+      "topic": "SSH"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Key pairs, ssh-keygen",
+      "problems": [
+        "d19p01",
+        "d19p03"
+      ]
+    },
+    {
+      "item": "~/.ssh/config",
+      "problems": [
+        "d19p02"
+      ]
+    },
+    {
+      "item": "authorized_keys",
+      "problems": [
+        "d19p03"
+      ]
+    },
+    {
+      "item": "Permissions 700/600",
+      "problems": [
+        "d19p01",
+        "d19p03"
+      ]
+    },
+    {
+      "item": "scp",
+      "problems": [
+        "d19p04"
+      ]
+    },
+    {
+      "item": "rsync -avz --dry-run",
+      "problems": [
+        "d19p04",
+        "d19p05"
+      ]
+    },
+    {
+      "item": "SSH tunnel -L",
+      "problems": [
+        "d19p07"
+      ]
+    },
+    {
+      "item": "ssh-agent",
+      "problems": [
+        "d19p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day19"
+}

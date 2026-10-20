@@ -1,0 +1,690 @@
+{
+  "day": 22,
+  "week": 4,
+  "title": "Safe and professional scripting",
+  "goal": "Write scripts that stop on errors, clean up after themselves, never run twice at once, can run again safely, and give CI the right exit code.",
+  "minutes": 90,
+  "needs": [
+    "shellcheck"
+  ],
+  "setup": [
+    "mkdir -p ~/bash-practice/day22 && cd ~/bash-practice/day22",
+    "# P4: a server config the setup script must change only once",
+    "printf '%s\\n' '# todo-api settings' 'port=8080' > app.conf",
+    "# P5: a CI step with problems, and a failing test runner",
+    "mkdir -p build",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"running 12 tests\"' 'echo \"FAIL: test_create_todo\"' 'exit 1' > build/run-tests.sh",
+    "chmod +x build/run-tests.sh",
+    "printf '%s\\n' '#!/bin/bash' '# CI step: go into build/, run the tests, save the output in test.log,' '# and FAIL the job (exit code not 0) if the tests fail.' 'BUILD_DIR=build' 'cd $BULD_DIR' 'echo \"building in $(pwd)\"' './run-tests.sh | tee test.log' 'echo \"tests finished\"' > ci-step.sh",
+    "# P7: a script to debug",
+    "printf '%s\\n' '#!/bin/bash' 'name=$1' 'greeting=\"Hello\"' 'if [ $name = \"admin\" ]; then greeting=\"Welcome back\"; fi' 'echo \"$greeting, $name\"' > greet.sh",
+    "cd ~/bash-practice/day22"
+  ],
+  "warmup": [
+    {
+      "q": "Which scenario check comes first when SSH fails: the key or the port?",
+      "a": "The port (and the name before it). If `nc -zv host 22` fails, the key does not matter yet.",
+      "from_day": 21
+    },
+    {
+      "q": "How do you create a unique temp file in a script?",
+      "a": "`TMP=$(mktemp)` (or `mktemp -d` for a folder).",
+      "from_day": 13
+    },
+    {
+      "q": "What does `trap cleanup TERM INT` do?",
+      "a": "It runs the function `cleanup` when the script gets SIGTERM or SIGINT (Ctrl+C).",
+      "from_day": 15
+    },
+    {
+      "q": "What is wrong with `cmd && exit 1` as the last line of a script?",
+      "a": "When `cmd` is false, the line is false, so the script exits with 1 even though nothing failed. Use `if cmd; then exit 1; fi; exit 0`.",
+      "from_day": 17
+    }
+  ],
+  "problems": [
+    {
+      "id": "d22p01",
+      "title": "set -euo pipefail: what each part catches",
+      "type": "predict",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "Most production scripts start with `set -euo pipefail`. In an interview the user must explain each letter with an example. Each test runs in its own `bash -c`, so the main script keeps running.",
+      "task": [
+        "Without options: run `false; echo \"still running\"`. Then the same with `set -e`.",
+        "Without options: `echo \"Hello $NAEM\"` (typo). Then with `set -u`.",
+        "Without options: `grep ERROR missing.log | wc -l; echo $?`. Then with `set -o pipefail`.",
+        "Predict each result before you run it. Write down which mistake each option catches."
+      ],
+      "hints": [
+        "`-e`: exit when a command fails (with some exceptions, like inside `if`).",
+        "`-u`: an unset variable is an error, not an empty string.",
+        "`pipefail`: a pipeline fails if any command in it fails, not only the last one."
+      ],
+      "solution": [
+        "echo \"=== -e ===\"",
+        "bash -c 'false; echo \"without -e: still running\"'",
+        "bash -c 'set -e; false; echo \"never printed\"'; echo \"with -e: stopped, exit code $?\"",
+        "echo \"=== -u ===\"",
+        "bash -c 'echo \"without -u: Hello [$NAEM]\"'",
+        "bash -c 'set -u; echo \"Hello $NAEM\"'; echo \"with -u: exit code $?\"",
+        "echo \"=== pipefail ===\"",
+        "bash -c 'grep ERROR missing.log | wc -l; echo \"without pipefail: exit code $?\"'",
+        "bash -c 'set -o pipefail; grep ERROR missing.log | wc -l; echo \"with pipefail: exit code $?\"'"
+      ],
+      "explanation": [
+        {
+          "part": "set -e",
+          "meaning": "Stop the script at the first failing command. Not inside `if`, `while` tests, or before `&&`/`||`."
+        },
+        {
+          "part": "set -u",
+          "meaning": "Using an unset variable is an error: `NAEM: unbound variable`, and the script stops with a non-zero code (127 here). Catches typos."
+        },
+        {
+          "part": "set -o pipefail",
+          "meaning": "The pipeline's exit code is the last non-zero one. Without it, `wc -l` (success) hides grep's error."
+        },
+        {
+          "part": "set -euo pipefail",
+          "meaning": "All three in one line, near the top of the script."
+        },
+        {
+          "part": "${VAR:-}",
+          "meaning": "With `-u`, use `${VAR:-}` for variables that may be unset on purpose."
+        }
+      ],
+      "expected_output": "=== -e ===\nwithout -e: still running\nwith -e: stopped, exit code 1\n=== -u ===\nwithout -u: Hello []\nbash: line 1: NAEM: unbound variable\nwith -u: exit code 127\n=== pipefail ===\ngrep: missing.log: No such file or directory\n0\nwithout pipefail: exit code 0\ngrep: missing.log: No such file or directory\n0\nwith pipefail: exit code 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Thinking `set -e` catches everything: `if false; then ...`, `false || true`, and commands in `$( )` inside `local x=$(...)` do not stop the script.",
+        "Adding `set -u` to an old script and getting `$1: unbound variable` when no argument is given. Use `${1:-}` or check `$#` first."
+      ],
+      "checks": [
+        {
+          "run": "bash -c 'set -u; echo \"Hello $NAEM\"'",
+          "expect": "NAEM: unbound variable"
+        }
+      ],
+      "interview_say": "`set -e` stops on errors, `set -u` makes unset variables an error, and `pipefail` makes a pipeline fail when any part fails. Together they turn silent bugs into clear failures.",
+      "try_yourself": "Run `bash -c 'set -e; if false; then echo yes; fi; echo \"still here\"'`. Why does `set -e` not stop here?"
+    },
+    {
+      "id": "d22p02",
+      "title": "trap EXIT + mktemp: always clean up",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A build script downloads files into a temp folder. When it fails in the middle, old temp folders stay in `/tmp` and fill the disk. With `trap cleanup EXIT`, the cleanup runs on success, on error and on Ctrl+C.",
+      "task": [
+        "Write `build-tmp.sh`: `set -euo pipefail`, create `WORK=$(mktemp -d)`, and `trap cleanup EXIT`.",
+        "In `cleanup`, remove `$WORK` and print the original exit code.",
+        "Make the script fail on purpose in the middle (`false`).",
+        "Run it, print the exit code, and check that the temp folder is gone."
+      ],
+      "hints": [
+        "Save the exit code first in cleanup: `local rc=$?`.",
+        "Print the temp folder path to a file, so it can be checked after the script ended.",
+        "`[ -d \"$path\" ] || echo gone`"
+      ],
+      "solution": [
+        "cat > build-tmp.sh <<'EOF'",
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "WORK=$(mktemp -d)",
+        "cleanup() {",
+        "  local rc=$?",
+        "  rm -rf \"$WORK\"",
+        "  echo \"cleanup: removed the temp folder (exit code was $rc)\"",
+        "}",
+        "trap cleanup EXIT",
+        "echo \"$WORK\" > last-workdir.txt",
+        "echo \"downloading into the temp folder\"",
+        "touch \"$WORK/part1.tgz\"",
+        "false                                   # something fails here",
+        "echo \"never printed\"",
+        "EOF",
+        "bash build-tmp.sh; echo \"script exit code: $?\"",
+        "[ -d \"$(cat last-workdir.txt)\" ] && echo \"temp folder still there\" || echo \"temp folder is gone\""
+      ],
+      "explanation": [
+        {
+          "part": "mktemp -d",
+          "meaning": "A new private temp folder (Day 13)."
+        },
+        {
+          "part": "trap cleanup EXIT",
+          "meaning": "Run `cleanup` when the script exits for any reason: normal end, `set -e` stop, `exit N`, Ctrl+C."
+        },
+        {
+          "part": "local rc=$?",
+          "meaning": "The first line of the trap still sees the exit code that caused the exit."
+        },
+        {
+          "part": "rm -rf \"$WORK\"",
+          "meaning": "Safe because `$WORK` always comes from mktemp; never `rm -rf` an unchecked variable."
+        }
+      ],
+      "expected_output": "downloading into the temp folder\ncleanup: removed the temp folder (exit code was 1)\nscript exit code: 1\ntemp folder is gone",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Putting cleanup only at the end of the script: with `set -e`, the end is never reached after an error.",
+        "`trap \"rm -rf $WORK\" EXIT` with double quotes before WORK is set: the trap gets an empty path. Use a function or single quotes."
+      ],
+      "interview_say": "I create temp files with `mktemp` and register `trap cleanup EXIT` right after, so cleanup runs whether the script succeeds, fails, or is interrupted.",
+      "try_yourself": "Add `trap 'echo \"interrupted\"; exit 130' INT` and press Ctrl+C during a `sleep 10` in the script."
+    },
+    {
+      "id": "d22p03",
+      "title": "Lock file: never run twice at the same time",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A backup runs from cron every 10 minutes. Sometimes one run takes 15 minutes, so two copies run at once and break each other's files. `flock` makes the second copy stop at once.",
+      "task": [
+        "Write `job.sh` that opens a lock file with `exec 9> job.lock` and takes the lock with `flock -n 9`.",
+        "If the lock is taken, print `another run is active, exiting` and exit 1.",
+        "The job itself: print a message, `sleep 2`, print done.",
+        "Start one copy in the background, then a second one at once. Print the exit codes."
+      ],
+      "hints": [
+        "`exec 9> FILE` opens FILE on file descriptor 9 for the whole script.",
+        "`flock -n 9` = try to lock fd 9, do not wait (`-n` = non-blocking).",
+        "The lock is released automatically when the script ends, even after a crash."
+      ],
+      "solution": [
+        "cat > job.sh <<'EOF'",
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "exec 9> job.lock",
+        "if ! flock -n 9; then",
+        "  echo \"[$1] another run is active, exiting\" >&2",
+        "  exit 1",
+        "fi",
+        "echo \"[$1] got the lock, working\"",
+        "sleep 2",
+        "echo \"[$1] done\"",
+        "EOF",
+        "bash job.sh first &",
+        "sleep 0.5",
+        "bash job.sh second; echo \"second run exit code: $?\"",
+        "wait $!; echo \"first run exit code: $?\"",
+        "bash job.sh third; echo \"third run exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "exec 9> job.lock",
+          "meaning": "Keep the lock file open as fd 9 until the script ends."
+        },
+        {
+          "part": "flock -n 9",
+          "meaning": "Take an exclusive lock; fail at once if another process has it."
+        },
+        {
+          "part": "automatic release",
+          "meaning": "The kernel releases the lock when the process ends. No stale lock files, unlike `touch lockfile`."
+        },
+        {
+          "part": "cron one-liner",
+          "meaning": "`flock -n /tmp/backup.lock /opt/backup.sh` in the crontab does the same without changing the script."
+        }
+      ],
+      "expected_output": "[first] got the lock, working\n[second] another run is active, exiting\nsecond run exit code: 1\n[first] done\nfirst run exit code: 0\n[third] got the lock, working\n[third] done\nthird run exit code: 0",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `[ -f lock ] && exit; touch lock`: two runs can pass the test at the same moment, and a crash leaves the lock file forever.",
+        "Putting the lock file in a folder cleaned at reboot is fine; putting it in a shared NFS folder can be unreliable."
+      ],
+      "interview_say": "To stop overlapping runs I use `flock`: `exec 9>/var/lock/job.lock; flock -n 9 || exit 1`. The lock is released automatically when the process ends, so there are no stale locks.",
+      "try_yourself": "Use `flock -w 5 9` instead of `-n`. Now the second run waits up to 5 seconds. What happens?"
+    },
+    {
+      "id": "d22p04",
+      "title": "Idempotent setup: safe to run again",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A server setup script is run again after every change. The first version added the same config line twice and failed on `mkdir` the second time. An idempotent script gives the same result no matter how many times it runs (like Ansible or Terraform).",
+      "task": [
+        "Write `setup.sh` that: creates `data/logs` and `data/cache`, adds `log_dir=data/logs` to `app.conf` only if it is missing, and points `current` to `data`.",
+        "Print `created` / `already ok` for each step.",
+        "Run it twice. Show `app.conf` and `readlink current` at the end."
+      ],
+      "hints": [
+        "`mkdir -p` never fails if the folder exists.",
+        "`grep -qxF 'line' file || echo 'line' >> file` adds a line only once.",
+        "`ln -sfn data current` can run many times."
+      ],
+      "solution": [
+        "cat > setup.sh <<'EOF'",
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "step() { printf '%-28s %s\\n' \"$1\" \"$2\"; }",
+        "for d in data/logs data/cache; do",
+        "  if [ -d \"$d\" ]; then step \"$d\" \"already ok\"; else mkdir -p \"$d\"; step \"$d\" \"created\"; fi",
+        "done",
+        "LINE='log_dir=data/logs'",
+        "if grep -qxF \"$LINE\" app.conf; then step \"app.conf: $LINE\" \"already ok\"",
+        "else echo \"$LINE\" >> app.conf; step \"app.conf: $LINE\" \"added\"; fi",
+        "ln -sfn data current",
+        "step \"current -> $(readlink current)\" \"ok\"",
+        "EOF",
+        "echo \"=== first run ===\"; bash setup.sh",
+        "echo \"=== second run ===\"; bash setup.sh",
+        "cat app.conf"
+      ],
+      "explanation": [
+        {
+          "part": "idempotent",
+          "meaning": "Running it 1 time or 10 times gives the same end state."
+        },
+        {
+          "part": "check, then act",
+          "meaning": "Test the current state first; change only what is missing."
+        },
+        {
+          "part": "grep -qxF",
+          "meaning": "Quiet, whole line (`-x`), fixed text (`-F`): exact line exists?"
+        },
+        {
+          "part": "mkdir -p / ln -sfn",
+          "meaning": "Commands that are already idempotent."
+        }
+      ],
+      "expected_output": "=== first run ===\ndata/logs                    created\ndata/cache                   created\napp.conf: log_dir=data/logs  added\ncurrent -> data              ok\n=== second run ===\ndata/logs                    already ok\ndata/cache                   already ok\napp.conf: log_dir=data/logs  already ok\ncurrent -> data              ok\n# todo-api settings\nport=8080\nlog_dir=data/logs",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`echo 'line' >> file` without a check: every run adds another copy.",
+        "`useradd deploybot` in a setup script: the second run fails with `useradd: user 'deploybot' already exists`. Check with `id deploybot` first."
+      ],
+      "interview_say": "My setup scripts are idempotent: they check the current state and change only what is missing, using `mkdir -p`, `grep -q || echo >>`, and `ln -sfn`. That is the same idea as Ansible or Terraform.",
+      "try_yourself": "Change the config value to `log_dir=/var/log/todo` in the script. Should the script replace the old line? Use `sed -i` for that case."
+    },
+    {
+      "id": "d22p05",
+      "title": "Find the bug: the CI step that is always green",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "In Jenkins, the job `ci-step.sh` is green even when tests fail. Looking closer: it does not even run in the right folder. The goal is in the comments: the job must fail if the tests fail.",
+      "task": [
+        "Run `bash ci-step.sh; echo \"CI sees exit code $?\"`. Read the output.",
+        "Find 4 problems: a typo in a variable name, `cd` without a check, no `set -euo pipefail`, and `| tee` hiding the test result.",
+        "Fix them. Run again: the job must now fail with a clear exit code, and `build/test.log` must exist."
+      ],
+      "hints": [
+        "`$BULD_DIR` is empty, so `cd` went to the home folder. `set -u` would catch it.",
+        "`cd \"$BUILD_DIR\" || exit 1` (or rely on `set -e`).",
+        "Without `pipefail`, the pipeline's exit code is the one of `tee`, which is 0."
+      ],
+      "solution": [
+        "bash ci-step.sh; echo \"CI sees exit code $?\"",
+        "cat > ci-step.sh <<'EOF'",
+        "#!/bin/bash",
+        "# CI step: go into build/, run the tests, save the output in test.log,",
+        "# and FAIL the job (exit code not 0) if the tests fail.",
+        "set -euo pipefail",
+        "BUILD_DIR=build",
+        "cd \"$BUILD_DIR\" || exit 1",
+        "echo \"building in $(pwd)\"",
+        "./run-tests.sh | tee test.log",
+        "echo \"tests finished\"",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "bash ci-step.sh; echo \"CI sees exit code $?\"",
+        "ls build/test.log"
+      ],
+      "explanation": [
+        {
+          "part": "BULD_DIR typo",
+          "meaning": "Bug 1: the variable was empty; `cd` with no argument goes to `$HOME`. `set -u` turns this into an error."
+        },
+        {
+          "part": "cd ... || exit 1",
+          "meaning": "Bug 2: never continue in the wrong folder."
+        },
+        {
+          "part": "set -euo pipefail",
+          "meaning": "Bug 3: without it the script went on after every error."
+        },
+        {
+          "part": "| tee + pipefail",
+          "meaning": "Bug 4: `tee` succeeded, so the failing tests were hidden. With pipefail, exit code 1 reaches Jenkins."
+        },
+        {
+          "part": "no \"tests finished\"",
+          "meaning": "With `set -e`, the script stops at the failed pipeline. Jenkins marks the build as failed."
+        }
+      ],
+      "expected_output": "building in /home/wicky\nci-step.sh: line 7: ./run-tests.sh: No such file or directory\ntests finished\nCI sees exit code 0\n--- fixed ---\nbuilding in /home/wicky/bash-practice/day22/build\nrunning 12 tests\nFAIL: test_create_todo\nCI sees exit code 1\nbuild/test.log",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Adding `|| true` to make a red build green. It hides real failures.",
+        "Checking only the console output in Jenkins. Jenkins decides red or green from the exit code alone."
+      ],
+      "interview_say": "CI tools only see exit codes. I start every CI script with `set -euo pipefail`, check `cd`, and remember that a pipe into `tee` hides failures unless `pipefail` is on.",
+      "try_yourself": "Run `shellcheck ci-step.sh` on the broken version (run Reset and setup again). Which warnings match the bugs you found?"
+    },
+    {
+      "id": "d22p06",
+      "title": "A logging function with timestamps and levels",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "When a nightly script fails, the team needs to know what happened and when. A small `log` function adds a timestamp and a level to every line, writes to a log file, and sends errors to stderr.",
+      "task": [
+        "Write `log LEVEL message...`: print `YYYY-MM-DD HH:MM:SS LEVEL message`.",
+        "Append every line to `job.log` with `tee -a`. For `ERROR`, send the screen copy to stderr.",
+        "Add `info`, `warn` and `error` shortcuts. Use them, then show `job.log`."
+      ],
+      "hints": [
+        "`date '+%F %T'` gives `2026-10-20 14:30:00`.",
+        "`printf '%s %-5s %s\\n' \"$(date '+%F %T')\" \"$level\" \"$*\"`",
+        "For errors: `... | tee -a job.log >&2`."
+      ],
+      "solution": [
+        "cat > logging.sh <<'EOF'",
+        "#!/bin/bash",
+        "LOG_FILE=${LOG_FILE:-job.log}",
+        "log() {",
+        "  local level=$1; shift",
+        "  local line",
+        "  line=$(printf '%s %-5s %s' \"$(date '+%F %T')\" \"$level\" \"$*\")",
+        "  if [ \"$level\" = ERROR ]; then echo \"$line\" | tee -a \"$LOG_FILE\" >&2",
+        "  else echo \"$line\" | tee -a \"$LOG_FILE\"; fi",
+        "}",
+        "info()  { log INFO \"$@\"; }",
+        "warn()  { log WARN \"$@\"; }",
+        "error() { log ERROR \"$@\"; }",
+        "info \"backup started\"",
+        "warn \"disk is 85% full\"",
+        "error \"upload to S3 failed\"",
+        "EOF",
+        "bash logging.sh 2>/dev/null",
+        "echo \"--- job.log ---\"",
+        "cut -d' ' -f3- job.log"
+      ],
+      "explanation": [
+        {
+          "part": "date '+%F %T'",
+          "meaning": "Timestamp in ISO style; sortable and clear."
+        },
+        {
+          "part": "%-5s",
+          "meaning": "Level padded to 5 characters, so messages line up."
+        },
+        {
+          "part": "tee -a ... >&2",
+          "meaning": "Errors go to the log file AND to stderr (Day 4)."
+        },
+        {
+          "part": "2>/dev/null when testing",
+          "meaning": "Shows that the ERROR line went to stderr: it is missing on screen but present in the file."
+        },
+        {
+          "part": "cut -d' ' -f3-",
+          "meaning": "Here only to hide the changing date and time in the printed log."
+        }
+      ],
+      "expected_output": "2026-10-20 16:00:56 INFO  backup started\n2026-10-20 16:00:56 WARN  disk is 85% full\n--- job.log ---\nINFO  backup started\nWARN  disk is 85% full\nERROR upload to S3 failed",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The screen lines contain the current date and time, so they are different on every run.",
+      "verified": true,
+      "mistakes": [
+        "Logging secrets (tokens, passwords) by mistake with `info \"using $TOKEN\"`. Never log secret values (Day 26).",
+        "Using `echo $line` without quotes: the double spaces from `%-5s` disappear."
+      ],
+      "interview_say": "My scripts use a small `log` function with timestamp and level, write to a file with `tee -a`, and send errors to stderr, so both humans and log tools can read them.",
+      "try_yourself": "Add `logger -t todo-backup \"$line\"` to also send each line to the system log (journal or syslog)."
+    },
+    {
+      "id": "d22p07",
+      "title": "Debug with bash -x and ShellCheck",
+      "type": "explain-error",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "`greet.sh` prints `unary operator expected` when started without a name. The user traces it line by line with `bash -x`, then lets ShellCheck explain the bug and the fix.",
+      "task": [
+        "Run `bash greet.sh` with no argument. Read the error.",
+        "Run `bash -x greet.sh`. Each `+` line is a command just before it runs. Find the broken test.",
+        "Run `shellcheck greet.sh`. Read the codes (SC2086 ...).",
+        "Fix the script and run it with no argument and with `admin`."
+      ],
+      "hints": [
+        "In the trace, `[ = admin ]` shows that `$name` was empty.",
+        "ShellCheck says: double quote to prevent splitting.",
+        "`if [ \"${name:-}\" = admin ]` works with an empty name."
+      ],
+      "solution": [
+        "bash greet.sh",
+        "echo \"=== trace ===\"",
+        "bash -x greet.sh",
+        "echo \"=== shellcheck ===\"",
+        "shellcheck -f gcc greet.sh || true",
+        "sed -i 's/\\[ \\$name = \"admin\" \\]/[ \"$name\" = \"admin\" ]/' greet.sh",
+        "echo \"=== fixed ===\"",
+        "bash greet.sh; bash greet.sh admin"
+      ],
+      "explanation": [
+        {
+          "part": "bash -x script",
+          "meaning": "Print each command (with variables already replaced) before running it."
+        },
+        {
+          "part": "+ '[' = admin ']'",
+          "meaning": "The empty `$name` disappeared, so `[` got only 2 words."
+        },
+        {
+          "part": "set -x / set +x",
+          "meaning": "Turn tracing on and off for one part of a script."
+        },
+        {
+          "part": "shellcheck -f gcc",
+          "meaning": "One line per finding: file:line:column: level: message [code]."
+        },
+        {
+          "part": "|| true",
+          "meaning": "ShellCheck exits 1 when it finds problems; here we only want to read them."
+        }
+      ],
+      "expected_output": "greet.sh: line 4: [: =: unary operator expected\nHello,\n=== trace ===\n+ name=\n+ greeting=Hello\n+ '[' = admin ']'\ngreet.sh: line 4: [: =: unary operator expected\n+ echo 'Hello, '\nHello,\n=== shellcheck ===\ngreet.sh:4:6: note: Double quote to prevent globbing and word splitting. [SC2086]\n=== fixed ===\nHello,\nWelcome back, admin",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "Ubuntu 22.04 has ShellCheck 0.8; the warning wording can be a little different.",
+      "verified": true,
+      "mistakes": [
+        "Leaving `set -x` on in a CI script: every command is printed, including secret values from variables.",
+        "Ignoring ShellCheck notes because the script works today. Most notes are bugs that wait for the right input (like a space in a name)."
+      ],
+      "interview_say": "I debug scripts with `bash -x` to see each command with real values, and I run ShellCheck in CI to catch quoting bugs, unchecked `cd`, and unused variables before they reach production.",
+      "try_yourself": "Set `PS4='+ ${LINENO}: '` and run `bash -x greet.sh` again. What does the trace show now?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "What does `set -euo pipefail` do?",
+      "a": "`-e` exits on the first failed command, `-u` treats unset variables as errors, and `-o pipefail` makes a pipeline fail when any command in it fails.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you make sure temp files are deleted even if the script fails?",
+      "a": "Create them with `mktemp` and add `trap cleanup EXIT` (or `trap 'rm -rf \"$TMP\"' EXIT`). The trap runs on success, error and Ctrl+C.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you stop a cron script from running twice at the same time?",
+      "a": "With `flock`: `exec 9>/var/lock/job.lock; flock -n 9 || exit 1`, or `flock -n /tmp/job.lock script.sh` in the crontab.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What is an idempotent script?",
+      "a": "A script that can run many times with the same final result. It checks the current state before changing anything (`mkdir -p`, `grep -q || echo >>`, `ln -sfn`).",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you debug a bash script?",
+      "a": "Run it with `bash -x` (or `set -x` around a part) to trace commands, and run ShellCheck to find quoting and logic bugs.",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "set -euo pipefail",
+      "meaning": "Stop on errors, unset vars, failed pipes",
+      "example": "#!/bin/bash\\nset -euo pipefail",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "${VAR:-}",
+      "meaning": "Allowed-empty variable under set -u",
+      "example": "if [ -n \"${DEBUG:-}\" ]; then set -x; fi",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "trap cleanup EXIT",
+      "meaning": "Always run cleanup at exit",
+      "example": "trap 'rm -rf \"$WORK\"' EXIT",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "mktemp -d",
+      "meaning": "Private temp folder",
+      "example": "WORK=$(mktemp -d)",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "exec 9>lock; flock -n 9",
+      "meaning": "Only one run at a time",
+      "example": "flock -n 9 || { echo busy; exit 1; }",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "flock -n FILE cmd",
+      "meaning": "Lock around a command (crontab)",
+      "example": "*/10 * * * * flock -n /tmp/b.lock /opt/backup.sh",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "grep -qxF line f || echo line >> f",
+      "meaning": "Add a line only once (idempotent)",
+      "example": "grep -qxF 'vm.swappiness=10' /etc/sysctl.conf || ...",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "log() with date '+%F %T'",
+      "meaning": "Timestamped log lines",
+      "example": "log INFO \"backup started\"",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "bash -x / set -x",
+      "meaning": "Trace commands",
+      "example": "bash -x deploy.sh",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "shellcheck",
+      "meaning": "Static checker for shell scripts",
+      "example": "shellcheck -f gcc *.sh",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "cd dir || exit 1",
+      "meaning": "Never continue in the wrong folder",
+      "example": "cd \"$BUILD_DIR\" || exit 1",
+      "topic": "Scripting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "set -euo pipefail",
+      "problems": [
+        "d22p01",
+        "d22p05"
+      ]
+    },
+    {
+      "item": "trap ... EXIT, cleanup",
+      "problems": [
+        "d22p02"
+      ]
+    },
+    {
+      "item": "mktemp",
+      "problems": [
+        "d22p02"
+      ]
+    },
+    {
+      "item": "Lock files",
+      "problems": [
+        "d22p03"
+      ]
+    },
+    {
+      "item": "Idempotent scripts",
+      "problems": [
+        "d22p04"
+      ]
+    },
+    {
+      "item": "Logging function with timestamps",
+      "problems": [
+        "d22p06"
+      ]
+    },
+    {
+      "item": "bash -x",
+      "problems": [
+        "d22p07"
+      ]
+    },
+    {
+      "item": "ShellCheck rules",
+      "problems": [
+        "d22p05",
+        "d22p07"
+      ]
+    },
+    {
+      "item": "Exit codes for CI",
+      "problems": [
+        "d22p01",
+        "d22p05"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day22"
+}

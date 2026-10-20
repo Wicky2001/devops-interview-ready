@@ -1,0 +1,751 @@
+{
+  "day": 5,
+  "week": 1,
+  "title": "Variables and quoting",
+  "goal": "Use variables, quotes, command substitution and arithmetic correctly, and know which variables a child process can see.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day05/bin && cd ~/bash-practice/day05",
+    "# P2: version file of the backend",
+    "echo '2.4.1' > VERSION",
+    "printf '%s\\n' 'GET /api/todos 200' 'GET /api/todos 500' 'GET /health 200' 'GET /api/todos 200' > access.log",
+    "# P3: a child script that reads two variables",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"child sees DB_HOST=[$DB_HOST] LOG_LEVEL=[$LOG_LEVEL]\"' > child.sh",
+    "chmod +x child.sh",
+    "# P4: a script that shows special variables",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"script name (\\$0): $0\"' 'echo \"first arg  (\\$1): $1\"' 'echo \"arg count  (\\$#): $#\"' 'echo \"all args   (\\$@): $@\"' 'echo \"my PID     (\\$\\$): $$\"' 'false' 'echo \"last exit  (\\$?): $?\"' > args.sh",
+    "chmod +x args.sh",
+    "# P5: a project folder with a space in its name, and a broken backup script",
+    "mkdir -p \"my project\"",
+    "echo 'readme' > \"my project/README.md\"",
+    "printf '%s\\n' '#!/bin/bash' 'SRC = \"my project\"' \"DEST='backups/\\$USER'\" 'mkdir -p $DEST' 'cp -r $SRC \"$DEST\"/' 'echo \"Saved $SRC to $DEST\"' > backup.sh",
+    "# P6: a small tool for the PATH problem",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"todo-api: running (version $(cat ~/bash-practice/day05/VERSION))\"' > bin/todo-status",
+    "chmod +x bin/todo-status",
+    "# P7: a demo settings file (NOT your real ~/.bashrc)",
+    "printf '%s\\n' 'export GREETING=\"hello from demo-bashrc\"' 'alias ll=\"ls -l\"' > demo-bashrc",
+    "cd ~/bash-practice/day05"
+  ],
+  "warmup": [
+    {
+      "q": "Which redirect saves stdout and stderr of `job.sh` in `job.log`?",
+      "a": "`./job.sh > job.log 2>&1` (or `./job.sh &> job.log`).",
+      "from_day": 4
+    },
+    {
+      "q": "Why does `sudo echo x > /etc/file` fail?",
+      "a": "The redirect is done by the normal user's shell, not by sudo. Use `echo x | sudo tee -a /etc/file`.",
+      "from_day": 4
+    },
+    {
+      "q": "Which grep option shows lines that do NOT match?",
+      "a": "`-v`, for example `grep -v INFO app.log`.",
+      "from_day": 2
+    },
+    {
+      "q": "Does root care about a file permission of 600?",
+      "a": "No. Root ignores read and write permissions. 600 only blocks other normal users.",
+      "from_day": 3
+    }
+  ],
+  "problems": [
+    {
+      "id": "d05p01",
+      "title": "Predict: single quotes, double quotes, no quotes",
+      "type": "predict",
+      "topic": "Variables",
+      "minutes": 12,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "A deploy message printed `Deploying $APP` instead of the app name. Another script broke on a folder name with a space. Quotes decide what bash does with `$`, spaces and wildcards.",
+      "task": [
+        "Set `APP=todo-api` and `DIR=\"my project\"`. (No spaces around `=`!)",
+        "Predict, then run: `echo \"Deploying $APP\"` and `echo 'Deploying $APP'`.",
+        "Predict, then run: `echo \"Path: ~/$APP\"` and `echo Path: ~/$APP`.",
+        "Predict, then run: `ls $DIR` and `ls \"$DIR\"`.",
+        "Predict, then run: `echo \"Today is $(date +%A)\" | wc -w` (the day name changes, the count does not)."
+      ],
+      "hints": [
+        "Double quotes: `$var` and `$(cmd)` are replaced, but spaces stay inside one word.",
+        "Single quotes: nothing is replaced. The text is printed exactly.",
+        "Without quotes, `$DIR` is split at the space into two words: `my` and `project`."
+      ],
+      "solution": [
+        "APP=todo-api",
+        "DIR=\"my project\"",
+        "echo \"Deploying $APP\"        # double quotes: $APP is replaced",
+        "echo 'Deploying $APP'        # single quotes: printed as written",
+        "echo \"Path: ~/$APP\"          # ~ is NOT expanded inside quotes",
+        "echo Path: ~/$APP            # no quotes: ~ becomes /home/wicky",
+        "ls $DIR || echo \"exit code: $?\"   # split into 'my' and 'project'",
+        "ls \"$DIR\"                    # one word: works",
+        "echo \"Today is $(date +%A)\" | wc -w"
+      ],
+      "explanation": [
+        {
+          "part": "\"...$APP...\"",
+          "meaning": "Double quotes: variables and `$( )` are replaced. Spaces stay in one argument."
+        },
+        {
+          "part": "'...$APP...'",
+          "meaning": "Single quotes: no replacement at all. Good for literal `$` text, regex and awk code."
+        },
+        {
+          "part": "~ in quotes",
+          "meaning": "The tilde `~` becomes the home folder only when it is not quoted. In scripts, use `$HOME`."
+        },
+        {
+          "part": "ls $DIR",
+          "meaning": "No quotes: bash splits the value at spaces. `ls` gets two names that do not exist."
+        },
+        {
+          "part": "$(date +%A)",
+          "meaning": "Command substitution: run the command and put its output here."
+        }
+      ],
+      "expected_output": "Deploying todo-api\nDeploying $APP\nPath: ~/todo-api\nPath: /home/wicky/todo-api\nls: cannot access 'my': No such file or directory\nls: cannot access 'project': No such file or directory\nexit code: 2\nREADME.md\n3",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Spaces around `=`: `APP = todo-api` gives `bash: APP: command not found`. Bash thinks `APP` is a command.",
+        "Single quotes around a variable in a message: `echo 'Hello $USER'` prints `Hello $USER`.",
+        "Not quoting a path with spaces: `ls: cannot access 'my': No such file or directory`."
+      ],
+      "checks": [
+        {
+          "run": "APP = todo-api",
+          "expect": "bash: APP: command not found"
+        },
+        {
+          "run": "echo 'Hello $USER'",
+          "expect": "Hello $USER"
+        }
+      ],
+      "interview_say": "Double quotes expand variables but keep spaces together; single quotes keep everything literal. I quote every variable, like `\"$DIR\"`, so spaces in names do not break my scripts.",
+      "try_yourself": "Run `echo \"$APP\"s` and `echo \"${APP}s\"` and `echo \"$APPs\"`. Why is the last one empty?",
+      "table": {
+        "head": [
+          "Quote",
+          "$var replaced?",
+          "Spaces kept in one word?",
+          "Wildcards (*) expanded?"
+        ],
+        "rows": [
+          [
+            "none",
+            "yes",
+            "no",
+            "yes"
+          ],
+          [
+            "\"double\"",
+            "yes",
+            "yes",
+            "no"
+          ],
+          [
+            "'single'",
+            "no",
+            "yes",
+            "no"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d05p02",
+      "title": "Build a release tag with $( ) and $(( ))",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The CI pipeline needs a tag like `todo-api-2.4.1-build8` for the Docker image, plus an error rate for the release notes. The version is in a file, and the build number is the last build plus one.",
+      "task": [
+        "Read the version from the file `VERSION` into a variable with `$(cat VERSION)`.",
+        "Set `LAST_BUILD=7`, and compute `BUILD=$((LAST_BUILD + 1))`.",
+        "Print the tag `todo-api-<version>-build<number>`. Use `${VERSION}` in braces.",
+        "Count all lines and the `500` lines of `access.log` with `$( )`.",
+        "Print the error rate in percent with `$(( ))` (whole numbers only)."
+      ],
+      "hints": [
+        "`VAR=$(command)` saves the output of a command.",
+        "Inside `$(( ))` variables need no `$`: `$((a + 1))` works.",
+        "Bash arithmetic is integer only: `$((ERRORS * 100 / TOTAL))` gives 25, not 25.0."
+      ],
+      "solution": [
+        "VERSION=$(cat VERSION)",
+        "LAST_BUILD=7",
+        "BUILD=$((LAST_BUILD + 1))",
+        "TAG=\"todo-api-${VERSION}-build${BUILD}\"",
+        "echo \"Image tag: $TAG\"",
+        "TOTAL=$(wc -l < access.log)",
+        "ERRORS=$(grep -c ' 500$' access.log)",
+        "echo \"Requests: $TOTAL, errors: $ERRORS\"",
+        "echo \"Error rate: $((ERRORS * 100 / TOTAL))%\"",
+        "echo \"7 / 2 in bash is $((7 / 2)), remainder $((7 % 2))\""
+      ],
+      "explanation": [
+        {
+          "part": "$(cat VERSION)",
+          "meaning": "Command substitution: the file content becomes the value."
+        },
+        {
+          "part": "$((LAST_BUILD + 1))",
+          "meaning": "Arithmetic expansion: whole-number math. No `$` needed inside."
+        },
+        {
+          "part": "${VERSION}",
+          "meaning": "Braces mark where the variable name ends, so text can follow directly."
+        },
+        {
+          "part": "wc -l < file",
+          "meaning": "With `<` wc prints only the number (no file name), good for variables."
+        },
+        {
+          "part": "' 500$'",
+          "meaning": "`$` at the end of a regex = end of the line. So only the status code at the end matches."
+        },
+        {
+          "part": "/ and %",
+          "meaning": "Integer division and remainder. For decimals use `awk` or `bc` (Day 11)."
+        }
+      ],
+      "expected_output": "Image tag: todo-api-2.4.1-build8\nRequests: 4, errors: 1\nError rate: 25%\n7 / 2 in bash is 3, remainder 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Old backticks `` `cat VERSION` `` work but are hard to read and to nest. Use `$( )`.",
+        "Writing `$(LAST_BUILD + 1)` with one pair of brackets: bash tries to run a command called `LAST_BUILD`: `bash: LAST_BUILD: command not found`.",
+        "Expecting decimals: `$((1 / 4))` is `0`."
+      ],
+      "checks": [
+        {
+          "run": "LAST_BUILD=7; echo $(LAST_BUILD + 1)",
+          "expect": "LAST_BUILD: command not found"
+        }
+      ],
+      "interview_say": "I use `$(command)` to save command output in a variable and `$(( ))` for integer math, for example to compute a build number or a percentage.",
+      "try_yourself": "Compute the percentage with one decimal using awk: `awk -v e=\"$ERRORS\" -v t=\"$TOTAL\" 'BEGIN { printf \"%.1f\\n\", e*100/t }'`."
+    },
+    {
+      "id": "d05p03",
+      "title": "export: why the child script sees nothing",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 12,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The user sets `DB_HOST` in the terminal and starts the backend with a script, but the script says `DB_HOST` is empty. Only exported variables are passed to child processes (programs started from this shell).",
+      "task": [
+        "Set `DB_HOST=db.internal` (no export) and run `./child.sh`.",
+        "Now `export DB_HOST` and run `./child.sh` again.",
+        "Give `LOG_LEVEL=debug` only to one run: `LOG_LEVEL=debug ./child.sh`. Then run `./child.sh` once more.",
+        "Check the environment with `printenv DB_HOST` and `env | grep '^DB_'`.",
+        "Remove the variable with `unset DB_HOST` and run `./child.sh`."
+      ],
+      "hints": [
+        "A normal variable lives only in the current shell. `export` puts it into the environment.",
+        "`NAME=value command` sets the variable only for that one command.",
+        "`printenv NAME` prints one environment variable; `env` prints all of them."
+      ],
+      "solution": [
+        "DB_HOST=db.internal",
+        "./child.sh                       # not exported: the child sees nothing",
+        "export DB_HOST",
+        "./child.sh                       # exported: the child sees it",
+        "LOG_LEVEL=debug ./child.sh       # only for this one command",
+        "./child.sh",
+        "printenv DB_HOST",
+        "env | grep '^DB_'",
+        "unset DB_HOST",
+        "./child.sh"
+      ],
+      "explanation": [
+        {
+          "part": "DB_HOST=db.internal",
+          "meaning": "A shell variable. Only this shell can see it."
+        },
+        {
+          "part": "export DB_HOST",
+          "meaning": "Mark it as an environment variable. Every child process gets a copy."
+        },
+        {
+          "part": "LOG_LEVEL=debug ./child.sh",
+          "meaning": "Set a variable for one command only. Common for one-time settings."
+        },
+        {
+          "part": "printenv / env",
+          "meaning": "Show environment variables (only exported ones)."
+        },
+        {
+          "part": "unset",
+          "meaning": "Delete a variable."
+        }
+      ],
+      "expected_output": "child sees DB_HOST=[] LOG_LEVEL=[]\nchild sees DB_HOST=[db.internal] LOG_LEVEL=[]\nchild sees DB_HOST=[db.internal] LOG_LEVEL=[debug]\nchild sees DB_HOST=[db.internal] LOG_LEVEL=[]\ndb.internal\nDB_HOST=db.internal\nchild sees DB_HOST=[] LOG_LEVEL=[]",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Expecting a child to change the parent: a script that runs `export X=1` does not change the terminal that started it. Use `source script.sh` for that.",
+        "Writing `export $DB_HOST`. That exports a variable with the name `db.internal`. Write `export DB_HOST` (no `$`)."
+      ],
+      "interview_say": "Only exported variables go to child processes. In Docker and Kubernetes, settings reach the app the same way: as environment variables.",
+      "try_yourself": "Run `bash -c 'echo $DB_HOST'` before and after `export`. `bash -c` is also a child process."
+    },
+    {
+      "id": "d05p04",
+      "title": "Special variables: $0 $1 $# $@ $? $$",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A deploy script must check its arguments: how many were given, what the first one is, and whether the last command worked. Bash fills special variables for this.",
+      "task": [
+        "Read `args.sh` with `cat args.sh`.",
+        "Run `./args.sh staging \"todo api\" v2`. Look at each line.",
+        "Run it with no arguments: `./args.sh`.",
+        "Run `ls /nope; echo \"exit: $?\"` and `ls /tmp > /dev/null; echo \"exit: $?\"`."
+      ],
+      "hints": [
+        "`$1` is the first argument, `$#` the number of arguments, `$@` all arguments.",
+        "`$?` is the exit code of the **last** command. Read it right away; the next command changes it.",
+        "`$$` is the process ID of the shell running the script. It changes every run."
+      ],
+      "solution": [
+        "cat args.sh",
+        "./args.sh staging \"todo api\" v2",
+        "echo \"--- no arguments ---\"",
+        "./args.sh",
+        "ls /nope; echo \"exit: $?\"",
+        "ls /tmp > /dev/null; echo \"exit: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "$0",
+          "meaning": "The name the script was started with."
+        },
+        {
+          "part": "$1, $2 ...",
+          "meaning": "Positional parameters: the arguments in order. `\"todo api\"` is one argument because of the quotes."
+        },
+        {
+          "part": "$#",
+          "meaning": "How many arguments."
+        },
+        {
+          "part": "$@",
+          "meaning": "All arguments. Write it as `\"$@\"` to keep each one separate (Day 9)."
+        },
+        {
+          "part": "$$",
+          "meaning": "PID of the current shell. Useful for unique temp file names."
+        },
+        {
+          "part": "$?",
+          "meaning": "Exit code of the last command: 0 = success, other = error."
+        }
+      ],
+      "expected_output": "#!/bin/bash\necho \"script name (\\$0): $0\"\necho \"first arg  (\\$1): $1\"\necho \"arg count  (\\$#): $#\"\necho \"all args   (\\$@): $@\"\necho \"my PID     (\\$\\$): $$\"\nfalse\necho \"last exit  (\\$?): $?\"\nscript name ($0): ./args.sh\nfirst arg  ($1): staging\narg count  ($#): 3\nall args   ($@): staging todo api v2\nmy PID     ($$): 25682\nlast exit  ($?): 1\n--- no arguments ---\nscript name ($0): ./args.sh\nfirst arg  ($1):\narg count  ($#): 0\nall args   ($@):\nmy PID     ($$): 25683\nlast exit  ($?): 1\nls: cannot access '/nope': No such file or directory\nexit: 2\nexit: 0",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The PID (`$$`) is different on every run. The `ls` error text is the same on the user's machine.",
+      "verified": true,
+      "mistakes": [
+        "Running another command before reading `$?`: then `$?` belongs to that command (often `echo`, which is 0).",
+        "Using `$10` for the tenth argument. Bash reads it as `$1` followed by `0`. Write `${10}`."
+      ],
+      "interview_say": "`$1` and so on are the arguments, `$#` their number, `$@` all of them, `$?` the last exit code and `$$` the PID. I check `$#` at the start of a script and print a usage message if it is wrong.",
+      "try_yourself": "Run `./args.sh a b c d e f g h i j` and add a line `echo \"${10}\"` to the script. What prints?"
+    },
+    {
+      "id": "d05p05",
+      "title": "Find the bug: the backup script variables",
+      "type": "fix-bug",
+      "topic": "Variables",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`backup.sh` should copy the folder `my project` into `backups/<user name>/`. It prints strange errors, and a folder named `$USER` appears.",
+      "task": [
+        "Read and run `bash backup.sh`. Read every error.",
+        "Run `ls backups` (if it exists). Is the folder name correct?",
+        "Find 3 bugs about `=`, quotes and spaces. Fix them.",
+        "Delete the wrong folder: `rm -rf 'backups/$USER'` (single quotes, so the name is exact). Run the fixed script.",
+        "Check with `ls -R backups`."
+      ],
+      "hints": [
+        "Line 2: look at the spaces.",
+        "Line 3: which quotes stop `$USER` from being replaced?",
+        "Line 5: the folder name has a space. Quote the variable."
+      ],
+      "solution": [
+        "bash backup.sh",
+        "rm -rf 'backups/$USER'           # remove the folder with the literal name $USER",
+        "cat > backup.sh <<'EOF'",
+        "#!/bin/bash",
+        "SRC=\"my project\"                 # no spaces around =",
+        "DEST=\"backups/$USER\"             # double quotes: $USER is replaced",
+        "mkdir -p \"$DEST\"",
+        "cp -r \"$SRC\" \"$DEST\"/            # quotes keep \"my project\" as one name",
+        "echo \"Saved $SRC to $DEST\"",
+        "EOF",
+        "bash backup.sh",
+        "ls -R backups"
+      ],
+      "explanation": [
+        {
+          "part": "SRC = \"my project\"",
+          "meaning": "Bug 1: spaces around `=`. Bash ran a command `SRC`: `SRC: command not found`."
+        },
+        {
+          "part": "DEST='backups/$USER'",
+          "meaning": "Bug 2: single quotes. The folder was really named `$USER`."
+        },
+        {
+          "part": "cp -r $SRC",
+          "meaning": "Bug 3: no quotes. With the right value, `my project` is split into `my` and `project`."
+        },
+        {
+          "part": "rm -rf 'backups/$USER'",
+          "meaning": "Single quotes so `rm` gets the literal name, not `backups/wicky`."
+        }
+      ],
+      "expected_output": "backup.sh: line 2: SRC: command not found\ncp: missing destination file operand after 'backups/$USER/'\nTry 'cp --help' for more information.\nSaved  to backups/$USER\nSaved my project to backups/wicky\nbackups:\nwicky\n\nbackups/wicky:\n'my project'\n\n'backups/wicky/my project':\nREADME.md",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "The folder name is the user name. On the learner's WSL it is `wicky`, like here.",
+      "verified": true,
+      "mistakes": [
+        "Fixing bug 1 but not bug 3: then `cp: cannot stat 'my': No such file or directory`.",
+        "Deleting with `rm -rf backups/$USER` (no quotes): this deletes `backups/wicky`, not the wrong folder."
+      ],
+      "checks": [
+        {
+          "run": "SRC=\"my project\"; mkdir -p out; cp -r $SRC out/",
+          "expect": "cp: cannot stat 'my': No such file or directory"
+        }
+      ],
+      "interview_say": "Most bash bugs I see are quoting bugs: spaces around `=`, single quotes that stop a variable, and unquoted paths with spaces. ShellCheck finds all three.",
+      "try_yourself": "If ShellCheck is installed (`sudo apt install -y shellcheck`), run `shellcheck backup.sh` on the broken version. Read the codes, like SC2086."
+    },
+    {
+      "id": "d05p06",
+      "title": "PATH: run your own tool by name",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team has small helper scripts in `~/bash-practice/day05/bin`. The user wants to type `todo-status` from any folder, like a normal command. Bash finds commands by searching the folders in `PATH`.",
+      "task": [
+        "Try `todo-status`. Read the error.",
+        "Show the first 3 folders in PATH: `echo \"$PATH\" | tr ':' '\\n' | head -n 3`.",
+        "Add the folder at the front: `export PATH=\"$HOME/bash-practice/day05/bin:$PATH\"`.",
+        "Run `todo-status` again and check where it comes from with `command -v todo-status`."
+      ],
+      "hints": [
+        "PATH is a list of folders separated by `:`.",
+        "Keep the old value: always include `:$PATH` when adding a folder.",
+        "To keep it after closing the terminal, add the export line to `~/.bashrc`."
+      ],
+      "solution": [
+        "todo-status || echo \"exit code: $?\"",
+        "echo \"$PATH\" | tr ':' '\\n' | head -n 3",
+        "export PATH=\"$HOME/bash-practice/day05/bin:$PATH\"",
+        "todo-status",
+        "command -v todo-status"
+      ],
+      "explanation": [
+        {
+          "part": "command not found (127)",
+          "meaning": "Bash searched every PATH folder and found nothing. Exit code 127."
+        },
+        {
+          "part": "tr ':' '\\n'",
+          "meaning": "Replace each `:` with a new line, so each folder is on its own line."
+        },
+        {
+          "part": "PATH=\"new:$PATH\"",
+          "meaning": "Put the new folder first, keep all old folders after it."
+        },
+        {
+          "part": "command -v",
+          "meaning": "Show which file bash will run for a name."
+        }
+      ],
+      "expected_output": "bash: todo-status: command not found\nexit code: 127\n/usr/local/sbin\n/usr/local/bin\n/usr/sbin\ntodo-api: running (version 2.4.1)\n/home/wicky/bash-practice/day05/bin/todo-status",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The user's real PATH is longer. On WSL it also contains many Windows folders like `/mnt/c/Windows`.",
+      "verified": true,
+      "mistakes": [
+        "`export PATH=\"$HOME/bin\"` without `:$PATH`. Now `ls` and `grep` are not found: `ls: command not found`. Open a new terminal to fix it.",
+        "Using `~` inside quotes: `\"~/bin:$PATH\"`. The `~` is not expanded. Use `$HOME`."
+      ],
+      "checks": [
+        {
+          "run": "export PATH=\"$HOME/bin\"; ls",
+          "expect": "ls: command not found"
+        }
+      ],
+      "interview_say": "PATH is a colon-separated list of folders where bash looks for commands. I add a folder with `export PATH=\"/my/bin:$PATH\"` and make it permanent in `~/.bashrc`.",
+      "try_yourself": "Run `type ls cd todo-status`. `type` shows if a name is a program, an alias or a shell builtin."
+    },
+    {
+      "id": "d05p07",
+      "title": "source vs run, and .bashrc vs .profile",
+      "type": "concept",
+      "topic": "Variables",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user adds `export GREETING=...` to a settings file and runs it, but the variable is still empty. Running a file starts a child shell; `source` reads the file into the current shell. Here we use `demo-bashrc`, not the real `~/.bashrc`.",
+      "task": [
+        "Read `demo-bashrc`.",
+        "Run it as a script: `bash demo-bashrc`, then `echo \"[$GREETING]\"`.",
+        "Load it with `source demo-bashrc` (or `. demo-bashrc`), then `echo \"[$GREETING]\"`.",
+        "Read the table: which file runs when?"
+      ],
+      "hints": [
+        "`bash file` = new child shell. Its variables are gone when it ends.",
+        "`source file` = run the lines in this shell.",
+        "After editing `~/.bashrc`, run `source ~/.bashrc` to load it without opening a new terminal."
+      ],
+      "solution": [
+        "cat demo-bashrc",
+        "bash demo-bashrc",
+        "echo \"after bash:   [$GREETING]\"",
+        "source demo-bashrc",
+        "echo \"after source: [$GREETING]\""
+      ],
+      "explanation": [
+        {
+          "part": "bash demo-bashrc",
+          "meaning": "Runs in a child shell. The export happens there and disappears."
+        },
+        {
+          "part": "source demo-bashrc",
+          "meaning": "Runs the lines in the current shell, so the variable stays."
+        },
+        {
+          "part": ". demo-bashrc",
+          "meaning": "Same as `source` (POSIX short form)."
+        }
+      ],
+      "expected_output": "export GREETING=\"hello from demo-bashrc\"\nalias ll=\"ls -l\"\nafter bash:   []\nafter source: [hello from demo-bashrc]",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "On Ubuntu, `~/.profile` also loads `~/.bashrc`, so on WSL both run when a terminal opens.",
+      "verified": true,
+      "mistakes": [
+        "Editing `~/.bashrc` and expecting the open terminal to change. Run `source ~/.bashrc` or open a new terminal.",
+        "Putting `echo` lines in `~/.bashrc`: they can break `scp` and other tools that start bash without a terminal."
+      ],
+      "interview_say": "`~/.bashrc` runs for every interactive shell, so I put aliases there. `~/.profile` runs at login, so I put PATH and environment variables there. To reload a file I use `source`.",
+      "try_yourself": "After `source demo-bashrc`, run `ll`. The alias works. Then run `bash -c 'll'`. Why does it fail?",
+      "table": {
+        "head": [
+          "File",
+          "When it runs",
+          "Put here"
+        ],
+        "rows": [
+          [
+            "`~/.bashrc`",
+            "every new interactive bash (new terminal tab)",
+            "aliases, prompt, functions"
+          ],
+          [
+            "`~/.profile`",
+            "login shells (log in, SSH, WSL start)",
+            "PATH and environment variables"
+          ],
+          [
+            "`/etc/environment`",
+            "for all users at login (system file)",
+            "system-wide variables (needs sudo)"
+          ]
+        ]
+      }
+    }
+  ],
+  "interview": [
+    {
+      "q": "What is the difference between single and double quotes in bash?",
+      "a": "Double quotes replace variables and `$( )`, but keep spaces in one word. Single quotes print everything exactly, with no replacement.",
+      "topic": "Variables"
+    },
+    {
+      "q": "What does `export` do?",
+      "a": "It puts a variable into the environment, so child processes (scripts and programs started from this shell) can see it.",
+      "topic": "Variables"
+    },
+    {
+      "q": "What is `$?`?",
+      "a": "The exit code of the last command. 0 means success; any other number means an error.",
+      "topic": "Variables"
+    },
+    {
+      "q": "What is the PATH variable?",
+      "a": "A colon-separated list of folders. Bash searches these folders, in order, when the user types a command name.",
+      "topic": "Variables"
+    },
+    {
+      "q": "What is the difference between `$(command)` and `$((1 + 2))`?",
+      "a": "`$(command)` runs a command and uses its output. `$(( ))` does integer arithmetic.",
+      "topic": "Variables"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "NAME=value",
+      "meaning": "Set a variable (no spaces around =)",
+      "example": "APP=todo-api",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "\"$VAR\"",
+      "meaning": "Use a variable, keep spaces safe",
+      "example": "cp -r \"$SRC\" \"$DEST\"",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "'text'",
+      "meaning": "Literal text, nothing replaced",
+      "example": "echo 'cost: $5'",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${VAR}",
+      "meaning": "Variable with clear end",
+      "example": "echo \"${APP}-v2\"",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "$(cmd)",
+      "meaning": "Command substitution",
+      "example": "VERSION=$(cat VERSION)",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "$(( ))",
+      "meaning": "Integer arithmetic",
+      "example": "echo $((errors * 100 / total))",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "export",
+      "meaning": "Pass a variable to child processes",
+      "example": "export DB_HOST=db.internal",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "VAR=x cmd",
+      "meaning": "Set a variable for one command only",
+      "example": "LOG_LEVEL=debug ./run.sh",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "unset",
+      "meaning": "Delete a variable",
+      "example": "unset DB_HOST",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "env / printenv",
+      "meaning": "Show environment variables",
+      "example": "printenv PATH",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "$0 $1 $# $@",
+      "meaning": "Script name, first arg, arg count, all args",
+      "example": "echo \"$# args\"",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "$? / $$",
+      "meaning": "Last exit code / current PID",
+      "example": "echo \"exit: $?\"",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "PATH",
+      "meaning": "Folders searched for commands",
+      "example": "export PATH=\"$HOME/bin:$PATH\"",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "source file",
+      "meaning": "Run a file in the current shell",
+      "example": "source ~/.bashrc",
+      "topic": "Variables"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Variables, quotes",
+      "problems": [
+        "d05p01",
+        "d05p05"
+      ]
+    },
+    {
+      "item": "export, environment",
+      "problems": [
+        "d05p03",
+        "d05p07"
+      ]
+    },
+    {
+      "item": "PATH",
+      "problems": [
+        "d05p06"
+      ]
+    },
+    {
+      "item": "$(...) command substitution",
+      "problems": [
+        "d05p01",
+        "d05p02"
+      ]
+    },
+    {
+      "item": "$(( )) arithmetic",
+      "problems": [
+        "d05p02"
+      ]
+    },
+    {
+      "item": "Special variables $? $@ $# $0 $$ $1",
+      "problems": [
+        "d05p04"
+      ]
+    },
+    {
+      "item": "env, printenv",
+      "problems": [
+        "d05p03"
+      ]
+    },
+    {
+      "item": ".bashrc vs .profile",
+      "problems": [
+        "d05p07"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day05"
+}

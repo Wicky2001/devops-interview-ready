@@ -1,0 +1,659 @@
+{
+  "day": 27,
+  "week": 4,
+  "title": "CI/CD shell steps",
+  "goal": "Write the shell parts of a pipeline: retries with backoff, waiting for a port, version tags from git, a deploy with health check and rollback, and steps whose exit codes Jenkins and GitHub Actions understand.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day27 && cd ~/bash-practice/day27",
+    "# P3: a small git repo with fixed dates, so commit ids are the same on every machine",
+    "export GIT_AUTHOR_NAME=Pasindu GIT_AUTHOR_EMAIL=pasindu@example.com GIT_COMMITTER_NAME=Pasindu GIT_COMMITTER_EMAIL=pasindu@example.com",
+    "G=\"git -C repo -c commit.gpgsign=false -c core.autocrlf=false\"",
+    "rm -rf repo && git -c init.defaultBranch=main init -q repo",
+    "n=0",
+    "for msg in \"first version\" \"add todo API\" \"fix login bug\" \"add health endpoint\" \"speed up list query\"; do",
+    "  n=$((n + 1)); echo \"change $n\" >> repo/CHANGES.txt",
+    "  GIT_AUTHOR_DATE=\"2026-10-0${n}T10:00:00+0530\" GIT_COMMITTER_DATE=\"2026-10-0${n}T10:00:00+0530\" $G add CHANGES.txt",
+    "  GIT_AUTHOR_DATE=\"2026-10-0${n}T10:00:00+0530\" GIT_COMMITTER_DATE=\"2026-10-0${n}T10:00:00+0530\" $G commit -q -m \"$msg\"",
+    "  [ $n -eq 2 ] && $G tag v1.2.0",
+    "done",
+    "unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL G",
+    "# P4: releases for a symlink deploy, and a broken deploy script",
+    "for r in v1 v2-good v2-bad; do mkdir -p \"releases/$r\"; done",
+    "echo '{\"status\": \"UP\", \"version\": \"v1\"}' > releases/v1/health.json",
+    "echo '{\"status\": \"UP\", \"version\": \"v2\"}' > releases/v2-good/health.json",
+    "echo '{\"status\": \"UPGRADING_FAILED\", \"version\": \"v2\"}' > releases/v2-bad/health.json",
+    "ln -sfn releases/v1 current",
+    "printf '%s\\n' '#!/bin/bash' '# Usage: deploy.sh RELEASE   (a folder in releases/, for example v2-good)' '# Switch \"current\" to the new release, check health, and roll back to the old release' '# if the check fails. The exit code must tell CI if the deploy worked.' 'NEW=$1' 'OLD=$(readlink current)' 'ln -sfn releases/$NEW current' 'if curl -s http://127.0.0.1:8141/current/health.json | grep -q UP; then' '  echo \"deployed $NEW\"' 'else' '  echo \"health check failed, rolling back\"' '  ln -sfn $NEW current' 'fi' > deploy.sh",
+    "# P5: pipeline steps",
+    "mkdir -p steps",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"lint: 0 problems\"' > steps/lint.sh",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"test: 41 passed, 1 failed\"' 'exit 1' > steps/test.sh",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"deploy: done\"' > steps/deploy.sh",
+    "cd ~/bash-practice/day27"
+  ],
+  "warmup": [
+    {
+      "q": "How do you get the newest stable tag from a releases JSON API?",
+      "a": "`curl -fsS URL | jq -r 'map(select(.prerelease == false)) | .[0].tag_name'`",
+      "from_day": 26
+    },
+    {
+      "q": "What is the safe pattern for an nginx config change?",
+      "a": "Back up, put the new config in place, `nginx -t`, reload only if it passes, else restore.",
+      "from_day": 26
+    },
+    {
+      "q": "Why do CI scripts need `set -o pipefail`?",
+      "a": "Without it, `cmd | tee log` returns tee's exit code (0), so a failing `cmd` looks green.",
+      "from_day": 22
+    },
+    {
+      "q": "How do you replace a symlink `current` in one step?",
+      "a": "`ln -sfn releases/v2 current`",
+      "from_day": 1
+    }
+  ],
+  "problems": [
+    {
+      "id": "d27p01",
+      "title": "retry with exponential backoff",
+      "type": "script",
+      "topic": "CI/CD",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The pipeline's `docker push` and `apt-get update` steps sometimes fail because of short network problems. Instead of failing the build, a `retry` function tries again, waiting 1, 2, 4 ... seconds (exponential backoff), up to a limit.",
+      "task": [
+        "Write `retry MAX FIRST_DELAY command...`: run the command; on failure wait, double the delay, try again.",
+        "Print each failed try to stderr. After MAX tries, return 1.",
+        "Test with the given `flaky` function (works on the 3rd call).",
+        "Test with `false` and 2 tries: print the exit code."
+      ],
+      "hints": [
+        "`shift 2` removes MAX and DELAY; then `\"$@\"` is the command.",
+        "`until \"$@\"; do ... done` loops while the command fails.",
+        "`delay=$((delay * 2))` doubles the wait."
+      ],
+      "solution": [
+        "retry() {      # usage: retry MAX_TRIES FIRST_DELAY command [args...]",
+        "  local max=$1 delay=$2 n=1",
+        "  shift 2",
+        "  until \"$@\"; do",
+        "    if (( n >= max )); then echo \"failed after $n tries: $*\" >&2; return 1; fi",
+        "    echo \"try $n failed: $*  (waiting ${delay}s)\" >&2",
+        "    sleep \"$delay\"",
+        "    n=$((n + 1)); delay=$((delay * 2))",
+        "  done",
+        "  echo \"ok after $n tries: $*\"",
+        "}",
+        "flaky() {      # fake network call: fails twice, then works",
+        "  local c; c=$(( $(cat .flaky-count 2>/dev/null || echo 0) + 1 ))",
+        "  echo \"$c\" > .flaky-count",
+        "  [ \"$c\" -ge 3 ]",
+        "}",
+        "retry 5 1 flaky",
+        "rm -f .flaky-count",
+        "retry 2 1 false; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "shift 2; \"$@\"",
+          "meaning": "The rest of the arguments is the command, run exactly as given (Day 9)."
+        },
+        {
+          "part": "until \"$@\"",
+          "meaning": "Run the command; repeat the body while it fails (Day 8)."
+        },
+        {
+          "part": "delay * 2",
+          "meaning": "Exponential backoff: 1, 2, 4, 8 ... seconds. Gives a busy service time to recover."
+        },
+        {
+          "part": "(( n >= max ))",
+          "meaning": "A hard limit, so the pipeline fails clearly instead of hanging."
+        },
+        {
+          "part": "return 1",
+          "meaning": "The caller (with `set -e`) stops the pipeline step."
+        }
+      ],
+      "expected_output": "try 1 failed: flaky  (waiting 1s)\ntry 2 failed: flaky  (waiting 2s)\nok after 3 tries: flaky\ntry 1 failed: false  (waiting 1s)\nfailed after 2 tries: false\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Retrying commands that are not safe to repeat (for example a database migration or a payment). Retry only idempotent steps.",
+        "Retrying a real error (wrong password, missing file) many times: it only makes the build slower. Retry network-type errors."
+      ],
+      "interview_say": "For flaky network steps I wrap the command in a retry function with a maximum number of tries and exponential backoff, and I only retry steps that are safe to run again.",
+      "try_yourself": "Add random jitter: `sleep $((delay + RANDOM % 2))`. Why does jitter help when many clients retry at the same time?"
+    },
+    {
+      "id": "d27p02",
+      "title": "wait_for_port before the next step",
+      "type": "script",
+      "topic": "CI/CD",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "In the integration test stage, the pipeline starts PostgreSQL and the backend in containers, then runs tests at once, and the tests fail because the backend is not listening yet. A `wait_for_port` function waits until the port accepts connections, with a timeout.",
+      "task": [
+        "Write `wait_for_port HOST PORT TIMEOUT` using bash's `/dev/tcp/HOST/PORT` (no extra tools).",
+        "Start a test server that begins listening after 2 seconds, in the background.",
+        "Wait for it (timeout 10). Then wait for a port that never opens (timeout 3) and print the exit code."
+      ],
+      "hints": [
+        "`(echo > /dev/tcp/127.0.0.1/8142) 2>/dev/null` succeeds only if the port is open.",
+        "Use `SECONDS` to measure the time (Day 12).",
+        "`nc -z HOST PORT` is another way, if netcat is installed."
+      ],
+      "solution": [
+        "wait_for_port() {      # usage: wait_for_port HOST PORT [TIMEOUT_SECONDS]",
+        "  local host=$1 port=$2 timeout=${3:-30} start=$SECONDS",
+        "  until (echo > \"/dev/tcp/$host/$port\") 2>/dev/null; do",
+        "    if (( SECONDS - start >= timeout )); then",
+        "      echo \"timeout: $host:$port not open after ${timeout}s\" >&2",
+        "      return 1",
+        "    fi",
+        "    sleep 1",
+        "  done",
+        "  echo \"$host:$port is open\"",
+        "}",
+        "( sleep 2; exec python3 -m http.server 8142 --bind 127.0.0.1 > /dev/null 2>&1 ) &",
+        "SRV=$!",
+        "wait_for_port 127.0.0.1 8142 10",
+        "wait_for_port 127.0.0.1 8143 3; echo \"exit code: $?\"",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "/dev/tcp/HOST/PORT",
+          "meaning": "A bash feature: opening this \"file\" makes a TCP connection. Works without nc or curl."
+        },
+        {
+          "part": "( ... ) 2>/dev/null",
+          "meaning": "Try in a subshell and hide the `Connection refused` message."
+        },
+        {
+          "part": "SECONDS - start",
+          "meaning": "Seconds waited so far."
+        },
+        {
+          "part": "return 1 on timeout",
+          "meaning": "The pipeline fails with a clear message instead of running tests against nothing."
+        },
+        {
+          "part": "port open ≠ ready",
+          "meaning": "A port can be open before the app is ready. For HTTP apps also wait for the health endpoint (Day 25)."
+        }
+      ],
+      "expected_output": "127.0.0.1:8142 is open\ntimeout: 127.0.0.1:8143 not open after 3s\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`sleep 30` before the tests \"to be safe\": slow on good days, still too short on bad days. Wait for the real condition.",
+        "Using `/dev/tcp` in a script run by `sh`: it is a bash feature only."
+      ],
+      "interview_say": "Instead of fixed sleeps, my pipelines wait for the real condition: `wait_for_port` with `/dev/tcp` or `nc -z`, then the health endpoint, always with a timeout that fails the step.",
+      "try_yourself": "In Docker Compose, the same idea is a `healthcheck` plus `depends_on: condition: service_healthy`. Find one in a compose file you know."
+    },
+    {
+      "id": "d27p03",
+      "title": "Version tags with git describe",
+      "type": "command",
+      "topic": "CI/CD",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Every build of the to-do backend needs a unique, readable version for the Docker tag and the release notes. `git describe` turns the last tag plus the commits since then into a version like `v1.2.0-3-g1a2b3c4`. The release job also needs the next patch version.",
+      "task": [
+        "In `repo`, show the history with `git log --oneline --decorate` and the tags.",
+        "Run `git describe --tags` and explain the 3 parts.",
+        "Get only the last tag (`--abbrev=0`) and compute the next patch version (v1.2.0 → v1.2.1).",
+        "Change a file without committing, and run `git describe --tags --dirty`.",
+        "Build the Docker image name from the describe output."
+      ],
+      "hints": [
+        "`v1.2.0-3-gXXXXXXX` = tag, commits since the tag, `g` + short commit id.",
+        "`IFS=. read -r MA MI PA <<< \"${TAG#v}\"` splits the numbers.",
+        "`--dirty` adds `-dirty` when there are uncommitted changes."
+      ],
+      "solution": [
+        "cd repo",
+        "git log --oneline --decorate",
+        "git tag",
+        "DESC=$(git describe --tags)",
+        "echo \"describe: $DESC\"",
+        "LAST=$(git describe --tags --abbrev=0)",
+        "IFS=. read -r MA MI PA <<< \"${LAST#v}\"",
+        "echo \"last tag: $LAST, next patch: v$MA.$MI.$((PA + 1))\"",
+        "echo \"change 6\" >> CHANGES.txt",
+        "echo \"with local changes: $(git describe --tags --dirty)\"",
+        "git checkout -q -- CHANGES.txt",
+        "echo \"image: registry.example.com/todo-backend:${DESC#v}\""
+      ],
+      "explanation": [
+        {
+          "part": "git describe --tags",
+          "meaning": "Nearest tag + number of commits since it + `g` + short commit id."
+        },
+        {
+          "part": "--abbrev=0",
+          "meaning": "Only the tag name."
+        },
+        {
+          "part": "IFS=. read -r ... <<<",
+          "meaning": "Split `1.2.0` at the dots into three variables (Day 4, Day 8)."
+        },
+        {
+          "part": "--dirty",
+          "meaning": "Mark builds made from uncommitted code: they must never go to production."
+        },
+        {
+          "part": "git checkout -- file",
+          "meaning": "Throw away the local change again."
+        },
+        {
+          "part": "${DESC#v}",
+          "meaning": "Docker tags often drop the `v` (Day 13)."
+        }
+      ],
+      "expected_output": "f763ad2 (HEAD -> main) speed up list query\n0c8bc65 add health endpoint\n4a81894 fix login bug\n59077f8 (tag: v1.2.0) add todo API\n330c79d first version\nv1.2.0\ndescribe: v1.2.0-3-gf763ad2\nlast tag: v1.2.0, next patch: v1.2.1\nwith local changes: v1.2.0-3-gf763ad2-dirty\nimage: registry.example.com/todo-backend:1.2.0-3-gf763ad2",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "Commit ids are the same as here because the setup used fixed names and dates.",
+      "verified": true,
+      "mistakes": [
+        "CI checks out with `--depth 1` (shallow clone): tags are missing and `git describe` fails with `fatal: No names found, cannot describe anything.` Fetch tags (`git fetch --tags --unshallow`) or use `--always`.",
+        "Using `latest` as the only tag: nobody can tell which code runs, and rolling back to a known version is hard."
+      ],
+      "checks": [
+        {
+          "run": "git init -q empty && cd empty && git describe --tags",
+          "expect": "fatal: No names found, cannot describe anything."
+        }
+      ],
+      "interview_say": "I version builds with `git describe --tags --always --dirty`: the last tag, commits since it, and the commit id. It is unique per commit, readable, and I can roll back to any version.",
+      "try_yourself": "Run `git describe --tags --always` in a folder with a new repo that has no tags. What does `--always` print?"
+    },
+    {
+      "id": "d27p04",
+      "title": "Find the bug: deploy with health check and rollback",
+      "type": "fix-bug",
+      "topic": "CI/CD",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`deploy.sh` switches the `current` symlink to a new release and checks its health. Yesterday a bad release stayed live after a failed check, CI showed the deploy as green, and a typo in the release name broke the site completely.",
+      "task": [
+        "Start the test server: `python3 -m http.server 8141 --bind 127.0.0.1 > /dev/null 2>&1 &`.",
+        "Run `bash deploy.sh v2-bad; echo $?` and then `readlink current`.",
+        "Reset with `ln -sfn releases/v1 current`. Run `bash deploy.sh v9; echo $?` (a release that does not exist).",
+        "Find 4 bugs: no check that the release exists, a health check that matches the wrong text, the rollback target, and the exit code.",
+        "Fix it and test `v2-bad`, `v9` and `v2-good`."
+      ],
+      "hints": [
+        "`[ -d \"releases/$NEW\" ] || { echo ... >&2; exit 2; }` before switching.",
+        "`grep -q UP` also matches `UPGRADING_FAILED`. Match the exact JSON: `grep -q '\"status\": \"UP\"'`.",
+        "Roll back to `$OLD`, then `exit 1`."
+      ],
+      "solution": [
+        "python3 -m http.server 8141 --bind 127.0.0.1 > /dev/null 2>&1 &",
+        "SRV=$!",
+        "sleep 1",
+        "bash deploy.sh v2-bad; echo \"exit code: $?\"; echo \"current -> $(readlink current)\"",
+        "ln -sfn releases/v1 current",
+        "bash deploy.sh v9; echo \"exit code: $?\"; echo \"current -> $(readlink current)\"",
+        "ln -sfn releases/v1 current",
+        "cat > deploy.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: deploy.sh RELEASE   (a folder in releases/, for example v2-good)",
+        "# Switch \"current\" to the new release, check health, and roll back to the old release",
+        "# if the check fails. The exit code must tell CI if the deploy worked.",
+        "set -euo pipefail",
+        "NEW=${1:?usage: deploy.sh RELEASE}",
+        "[ -d \"releases/$NEW\" ] || { echo \"error: release $NEW does not exist\" >&2; exit 2; }",
+        "OLD=$(readlink current)",
+        "ln -sfn \"releases/$NEW\" current",
+        "if curl -fs --max-time 5 http://127.0.0.1:8141/current/health.json | grep -q '\"status\": \"UP\"'; then",
+        "  echo \"deployed $NEW\"",
+        "else",
+        "  ln -sfn \"$OLD\" current",
+        "  echo \"health check failed, rolled back to $OLD\" >&2",
+        "  exit 1",
+        "fi",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "for r in v2-bad v9 v2-good; do",
+        "  bash deploy.sh \"$r\"; echo \"$r: exit code $?, current -> $(readlink current)\"",
+        "done",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "[ -d releases/$NEW ]",
+          "meaning": "Bug 1: `v9` created a broken symlink, so the site served nothing."
+        },
+        {
+          "part": "grep -q '\"status\": \"UP\"'",
+          "meaning": "Bug 2: `grep -q UP` matched `UPGRADING_FAILED`."
+        },
+        {
+          "part": "ln -sfn \"$OLD\" current",
+          "meaning": "Bug 3: the rollback pointed to `$NEW` (and even without `releases/`)."
+        },
+        {
+          "part": "exit 1 after rollback",
+          "meaning": "Bug 4: the script ended with 0, so CI showed a failed deploy as green."
+        },
+        {
+          "part": "set -euo pipefail, curl -f --max-time",
+          "meaning": "Safe defaults (Day 22, Day 18)."
+        },
+        {
+          "part": "symlink switch",
+          "meaning": "`ln -sfn` changes the live release in one step, and rollback is the same command with the old target."
+        }
+      ],
+      "expected_output": "deployed v2-bad\nexit code: 0\ncurrent -> releases/v2-bad\nhealth check failed, rolling back\nexit code: 0\ncurrent -> v9\n--- fixed ---\nhealth check failed, rolled back to releases/v1\nv2-bad: exit code 1, current -> releases/v1\nerror: release v9 does not exist\nv9: exit code 2, current -> releases/v1\ndeployed v2-good\nv2-good: exit code 0, current -> releases/v2-good",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Checking health only once, at once after the switch: some apps need a few seconds. Use the retry function from P1.",
+        "Rolling back without an alert: the team does not know the release failed. Exit non-zero so CI reports it."
+      ],
+      "interview_say": "My deploy script validates the input, switches the release with an atomic symlink, runs a health check with timeout, and on failure rolls back to the previous release and exits non-zero so the pipeline goes red.",
+      "try_yourself": "Use `retry 3 1 check_health` from P1 instead of a single check."
+    },
+    {
+      "id": "d27p05",
+      "title": "Pipeline steps: exit codes for Jenkins and GitHub Actions",
+      "type": "script",
+      "topic": "CI/CD",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Jenkins `sh` steps and GitHub Actions `run:` steps are bash scripts: a non-zero exit code fails the stage. The user writes a small parameterised runner `ci.sh --env ENV --steps a,b,c [--dry-run]` that runs steps in order, stops at the first failure, and prints a GitHub Actions error annotation.",
+      "task": [
+        "Parse long options with a `while`/`case`/`shift` loop: `--env`, `--steps`, `--dry-run`. Validate `--env`.",
+        "Split `--steps` at commas into an array.",
+        "Run `steps/NAME.sh` for each step; on failure print `::error::step NAME failed (exit N)` and exit with that code.",
+        "Run it: dry run for all steps; real run for `lint,test,deploy`; real run for `lint,deploy`."
+      ],
+      "hints": [
+        "`while [ $# -gt 0 ]; do case $1 in --env) ENV=$2; shift 2 ;; ... esac; done`",
+        "`IFS=, read -r -a STEPS <<< \"$LIST\"`",
+        "`bash \"steps/$s.sh\" || { rc=$?; echo \"::error::...\"; exit $rc; }`"
+      ],
+      "solution": [
+        "cat > ci.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: ci.sh --env dev|staging|prod --steps lint,test,deploy [--dry-run]",
+        "set -euo pipefail",
+        "usage() { echo \"usage: ci.sh --env dev|staging|prod --steps a,b,c [--dry-run]\" >&2; exit 2; }",
+        "ENV=\"\"; LIST=\"\"; DRY=false",
+        "while [ $# -gt 0 ]; do",
+        "  case $1 in",
+        "    --env) ENV=${2:-}; shift 2 ;;",
+        "    --steps) LIST=${2:-}; shift 2 ;;",
+        "    --dry-run) DRY=true; shift ;;",
+        "    *) usage ;;",
+        "  esac",
+        "done",
+        "case $ENV in dev|staging|prod) ;; *) usage ;; esac",
+        "[ -n \"$LIST\" ] || usage",
+        "IFS=, read -r -a STEPS <<< \"$LIST\"",
+        "for s in \"${STEPS[@]}\"; do",
+        "  if $DRY; then echo \"[dry-run] would run steps/$s.sh for $ENV\"; continue; fi",
+        "  echo \"::group::$s\"",
+        "  bash \"steps/$s.sh\" || { rc=$?; echo \"::endgroup::\"; echo \"::error::step $s failed (exit $rc)\"; exit $rc; }",
+        "  echo \"::endgroup::\"",
+        "done",
+        "echo \"pipeline OK for $ENV\"",
+        "EOF",
+        "bash ci.sh --env staging --steps lint,test,deploy --dry-run; echo \"exit code: $?\"",
+        "echo \"---\"",
+        "bash ci.sh --env staging --steps lint,test,deploy; echo \"exit code: $?\"",
+        "echo \"---\"",
+        "bash ci.sh --env staging --steps lint,deploy; echo \"exit code: $?\"",
+        "bash ci.sh --env qa --steps lint; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "while/case/shift",
+          "meaning": "Parse long options (`--env value`); getopts only knows short ones (Day 9)."
+        },
+        {
+          "part": "IFS=, read -r -a",
+          "meaning": "Split a comma list into an array."
+        },
+        {
+          "part": "|| { rc=$?; ...; exit $rc; }",
+          "meaning": "Keep the original exit code of the failed step and stop."
+        },
+        {
+          "part": "::group:: / ::error::",
+          "meaning": "GitHub Actions workflow commands: fold the log, and show a red annotation. Jenkins just shows the text."
+        },
+        {
+          "part": "Jenkinsfile",
+          "meaning": "`sh './ci.sh --env staging --steps lint,test'` — a non-zero exit fails the stage."
+        },
+        {
+          "part": "GitHub Actions",
+          "meaning": "`run: ./ci.sh --env staging --steps lint,test` — the runner uses `bash -e`, and non-zero fails the job."
+        }
+      ],
+      "expected_output": "[dry-run] would run steps/lint.sh for staging\n[dry-run] would run steps/test.sh for staging\n[dry-run] would run steps/deploy.sh for staging\npipeline OK for staging\nexit code: 0\n---\n::group::lint\nlint: 0 problems\n::endgroup::\n::group::test\ntest: 41 passed, 1 failed\n::endgroup::\n::error::step test failed (exit 1)\nexit code: 1\n---\n::group::lint\nlint: 0 problems\n::endgroup::\n::group::deploy\ndeploy: done\n::endgroup::\npipeline OK for staging\nexit code: 0\nusage: ci.sh --env dev|staging|prod --steps a,b,c [--dry-run]\nexit code: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`|| echo \"failed\"` without `exit`: the step prints an error but the pipeline continues and deploys untested code.",
+        "Different behavior on CI and laptops because of `sh` vs `bash`. Put `#!/bin/bash` and call scripts with `bash`, or set `shell: bash` in GitHub Actions."
+      ],
+      "interview_say": "In Jenkins and GitHub Actions every shell step passes or fails by its exit code. My CI scripts use `set -euo pipefail`, take parameters as options, stop at the first failing step, and keep that step's exit code.",
+      "try_yourself": "Add `--retries N` and run each step with `retry N 1 bash steps/$s.sh` from P1."
+    },
+    {
+      "id": "d27p06",
+      "title": "Compare versions with sort -V (no downgrades)",
+      "type": "command",
+      "topic": "CI/CD",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A deploy pipeline must refuse to deploy an older version by mistake (for example `v1.9.2` over `v1.10.0`). Text sorting puts `v1.10.0` before `v1.9.2`; version sorting with `sort -V` gets it right.",
+      "task": [
+        "Sort `v1.9.2 v1.10.0 v1.2.0` with `sort` and with `sort -V`. Compare.",
+        "Write `is_newer A B` that is true when A is newer than B.",
+        "Test: `v1.10.0` vs `v1.9.2`, and `v1.2.0` vs `v1.10.0`."
+      ],
+      "hints": [
+        "`printf '%s\\n' \"$A\" \"$B\" | sort -V | tail -n 1` = the newer one.",
+        "A is newer if it is the last one and not equal to B.",
+        "`sort -V` = natural version sort (GNU)."
+      ],
+      "solution": [
+        "printf '%s\\n' v1.9.2 v1.10.0 v1.2.0 | sort | xargs echo \"text sort:   \"",
+        "printf '%s\\n' v1.9.2 v1.10.0 v1.2.0 | sort -V | xargs echo \"version sort:\"",
+        "is_newer() { [ \"$1\" != \"$2\" ] && [ \"$(printf '%s\\n' \"$1\" \"$2\" | sort -V | tail -n 1)\" = \"$1\" ]; }",
+        "is_newer v1.10.0 v1.9.2 && echo \"v1.10.0 is newer than v1.9.2: deploy\"",
+        "is_newer v1.2.0 v1.10.0 || echo \"v1.2.0 is not newer than v1.10.0: refuse (downgrade)\""
+      ],
+      "explanation": [
+        {
+          "part": "sort",
+          "meaning": "Text order compares character by character: `1` < `9`, so `v1.10` comes first."
+        },
+        {
+          "part": "sort -V",
+          "meaning": "Version order: numbers inside the text are compared as numbers."
+        },
+        {
+          "part": "is_newer",
+          "meaning": "Returns 0 (true) or 1 (false), so it works in `if` and with `&&`/`||` (Day 9)."
+        }
+      ],
+      "expected_output": "text sort:    v1.10.0 v1.2.0 v1.9.2\nversion sort: v1.2.0 v1.9.2 v1.10.0\nv1.10.0 is newer than v1.9.2: deploy\nv1.2.0 is not newer than v1.10.0: refuse (downgrade)",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Comparing versions as strings with `[[ $a > $b ]]`: `v1.10.0` is \"smaller\" than `v1.9.2` in text order."
+      ],
+      "interview_say": "To compare versions in bash I use `sort -V`, which sorts numbers inside the version as numbers. That lets a pipeline refuse accidental downgrades.",
+      "try_yourself": "Where does `v1.10.0-rc1` go in `sort -V` compared to `v1.10.0`? Is that what you want for pre-releases?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do Jenkins and GitHub Actions know if a shell step failed?",
+      "a": "Only by the exit code: 0 passes, anything else fails the step. That is why CI scripts need `set -euo pipefail` and must not hide errors.",
+      "topic": "CI/CD"
+    },
+    {
+      "q": "How would you write a retry for a flaky command?",
+      "a": "A loop with a maximum number of tries and a growing sleep (exponential backoff), running `\"$@\"` and returning non-zero after the last failure.",
+      "topic": "CI/CD"
+    },
+    {
+      "q": "How do you wait for a service in a pipeline?",
+      "a": "Wait for the real condition with a timeout: `wait_for_port` (`/dev/tcp` or `nc -z`) and then the health endpoint with `curl -f`. Not a fixed `sleep`.",
+      "topic": "CI/CD"
+    },
+    {
+      "q": "How do you create a version for every build?",
+      "a": "`git describe --tags --always --dirty` gives the last tag, commits since it and the commit id, for example `v1.2.0-3-g1a2b3c4`.",
+      "topic": "CI/CD"
+    },
+    {
+      "q": "How does a deploy script roll back?",
+      "a": "Keep the previous release, switch to the new one, check health; if it fails, switch back (for example `ln -sfn` to the old release or `kubectl rollout undo`) and exit non-zero.",
+      "topic": "CI/CD"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "retry N DELAY cmd...",
+      "meaning": "Retry with exponential backoff",
+      "example": "retry 5 2 docker push \"$IMAGE\"",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "until \"$@\"; do ...; done",
+      "meaning": "Repeat while a command fails",
+      "example": "until curl -fs \"$URL\"; do sleep 2; done",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "(echo > /dev/tcp/HOST/PORT)",
+      "meaning": "Test a TCP port with bash only",
+      "example": "(echo > /dev/tcp/127.0.0.1/5432) 2>/dev/null && echo open",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "git describe --tags --always --dirty",
+      "meaning": "Version from git",
+      "example": "VERSION=$(git describe --tags --always --dirty)",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "git describe --tags --abbrev=0",
+      "meaning": "Last tag only",
+      "example": "LAST=$(git describe --tags --abbrev=0)",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "IFS=. read -r A B C <<< \"$V\"",
+      "meaning": "Split a version into numbers",
+      "example": "IFS=. read -r MA MI PA <<< \"1.2.0\"",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "ln -sfn new current / old current",
+      "meaning": "Atomic switch and rollback",
+      "example": "ln -sfn releases/v2 current",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "while/case/shift",
+      "meaning": "Parse long options",
+      "example": "case $1 in --env) ENV=$2; shift 2 ;; esac",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "IFS=, read -r -a ARR",
+      "meaning": "Comma list to array",
+      "example": "IFS=, read -r -a STEPS <<< \"lint,test\"",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "::error:: / ::group::",
+      "meaning": "GitHub Actions log commands",
+      "example": "echo \"::error::tests failed\"",
+      "topic": "CI/CD"
+    },
+    {
+      "cmd": "sort -V",
+      "meaning": "Version sort",
+      "example": "printf '%s\\n' v1.9 v1.10 | sort -V",
+      "topic": "CI/CD"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Deploy script with validation",
+      "problems": [
+        "d27p04"
+      ]
+    },
+    {
+      "item": "Rollback",
+      "problems": [
+        "d27p04"
+      ]
+    },
+    {
+      "item": "retry function with backoff",
+      "problems": [
+        "d27p01"
+      ]
+    },
+    {
+      "item": "wait_for_port",
+      "problems": [
+        "d27p02"
+      ]
+    },
+    {
+      "item": "Version tagging with git describe",
+      "problems": [
+        "d27p03",
+        "d27p06"
+      ]
+    },
+    {
+      "item": "Exit codes in Jenkins/GitHub Actions steps",
+      "problems": [
+        "d27p05"
+      ]
+    },
+    {
+      "item": "Parameterised scripts",
+      "problems": [
+        "d27p05"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day27"
+}

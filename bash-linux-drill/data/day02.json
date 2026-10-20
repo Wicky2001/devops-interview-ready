@@ -1,0 +1,621 @@
+{
+  "day": 2,
+  "week": 1,
+  "title": "Reading and searching files",
+  "goal": "Read big log and config files quickly, find the important lines, and compare two versions of a file.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day02/var/log/nginx && cd ~/bash-practice/day02",
+    "# Nginx-style access log of the to-do app (40 lines)",
+    "for i in $(seq 1 40); do",
+    "  case $((i % 10)) in",
+    "    0) code=500; url=/api/todos ;;",
+    "    3) code=404; url=/favicon.ico ;;",
+    "    7) code=201; url=/api/todos ;;",
+    "    *) code=200; url=/api/todos ;;",
+    "  esac",
+    "  ip=\"10.0.0.$(( (i % 4) + 1 ))\"",
+    "  printf '%s - - [20/Oct/2026:10:%02d:00 +0530] \"GET %s HTTP/1.1\" %s 512\\n' \"$ip\" \"$i\" \"$url\" \"$code\"",
+    "done > var/log/nginx/access.log",
+    "# backend log with a few errors",
+    "printf '%s\\n' '2026-10-20 10:00:01 INFO  backend started on port 8080' '2026-10-20 10:00:05 INFO  connected to database' '2026-10-20 10:05:12 WARN  slow query: 1200 ms' '2026-10-20 10:07:40 ERROR database connection lost' '2026-10-20 10:07:41 INFO  retrying connection' '2026-10-20 10:07:46 ERROR database connection lost' '2026-10-20 10:07:51 INFO  connected to database' '2026-10-20 10:12:03 WARN  slow query: 950 ms' > var/log/backend.log",
+    "# frontend log for the live-watch problem",
+    "printf '%s\\n' '2026-10-20 10:00:02 INFO  frontend started' '2026-10-20 10:03:10 INFO  GET /' '2026-10-20 10:04:55 WARN  api slow (2.1 s)' > var/log/frontend.log",
+    "# two versions of an app config",
+    "printf '%s\\n' 'port=8080' 'db_host=db.internal' 'db_pool=10' 'log_level=info' 'cache=on' > app-v1.conf",
+    "printf '%s\\n' 'port=8080' 'db_host=db-new.internal' 'db_pool=20' 'log_level=info' 'cache=on' > app-v2.conf",
+    "# list of servers with repeats (from 3 inventories)",
+    "printf '%s\\n' web-02 db-01 web-01 web-02 cache-01 web-01 db-01 web-03 > servers.txt",
+    "# a broken report script",
+    "printf '%s\\n' '#!/bin/bash' '# Print the last 5 lines of the backend log and count ERROR lines' 'LOG=var/log/backend.log' 'tail -5 $log' 'echo \"Errors:\"' 'grep ERROR var/log/backend.log | wc -l var/log/backend.log' > report.sh",
+    "cd ~/bash-practice/day02"
+  ],
+  "warmup": [
+    {
+      "q": "What is the difference between `/` and `/root`?",
+      "a": "`/` is the root directory, the top of all folders. `/root` is the home folder of the root user.",
+      "from_day": 1
+    },
+    {
+      "q": "Which command creates `a/b/c` when `a` does not exist yet?",
+      "a": "`mkdir -p a/b/c`",
+      "from_day": 1
+    },
+    {
+      "q": "A symlink points to a file. The file is deleted. What happens to the symlink?",
+      "a": "It becomes a broken link. `cat` gives `No such file or directory`. A hard link would still work.",
+      "from_day": 1
+    },
+    {
+      "q": "What does `2>/dev/null` do?",
+      "a": "It sends error messages (stderr) to `/dev/null`, so they disappear.",
+      "from_day": 0
+    }
+  ],
+  "problems": [
+    {
+      "id": "d02p01",
+      "title": "First look at a big log: head, tail, wc",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The to-do app is slow. The team lead asks: \"How many requests did Nginx get, and what were the first and the last ones?\" The access log is too big to read with `cat`.",
+      "task": [
+        "Count the lines of `var/log/nginx/access.log` with `wc -l`.",
+        "Show the first 3 lines with `head`.",
+        "Show the last 2 lines with `tail`.",
+        "Show only lines 10 to 12 (use `head` and `tail` together with a pipe).",
+        "Show the same file with line numbers using `nl`, but only the first 3 lines."
+      ],
+      "hints": [
+        "`head -n N` shows the first N lines. `tail -n N` shows the last N lines.",
+        "For lines 10-12: take the first 12 lines, then the last 3 of those.",
+        "`head -n 12 file | tail -n 3` and `nl file | head -n 3`."
+      ],
+      "solution": [
+        "wc -l var/log/nginx/access.log",
+        "head -n 3 var/log/nginx/access.log",
+        "tail -n 2 var/log/nginx/access.log",
+        "head -n 12 var/log/nginx/access.log | tail -n 3     # lines 10, 11, 12",
+        "nl var/log/nginx/access.log | head -n 3"
+      ],
+      "explanation": [
+        {
+          "part": "wc -l file",
+          "meaning": "Counts lines. Prints the number and the file name."
+        },
+        {
+          "part": "head -n 3",
+          "meaning": "First 3 lines. Without `-n`, head shows 10 lines."
+        },
+        {
+          "part": "tail -n 2",
+          "meaning": "Last 2 lines. Without `-n`, tail shows 10 lines."
+        },
+        {
+          "part": "head -n 12 | tail -n 3",
+          "meaning": "The pipe `|` sends the first 12 lines into `tail`, which keeps the last 3."
+        },
+        {
+          "part": "nl",
+          "meaning": "Number lines. Like `cat -n`, but skips empty lines by default."
+        }
+      ],
+      "expected_output": "40 var/log/nginx/access.log\n10.0.0.2 - - [20/Oct/2026:10:01:00 +0530] \"GET /api/todos HTTP/1.1\" 200 512\n10.0.0.3 - - [20/Oct/2026:10:02:00 +0530] \"GET /api/todos HTTP/1.1\" 200 512\n10.0.0.4 - - [20/Oct/2026:10:03:00 +0530] \"GET /favicon.ico HTTP/1.1\" 404 512\n10.0.0.4 - - [20/Oct/2026:10:39:00 +0530] \"GET /api/todos HTTP/1.1\" 200 512\n10.0.0.1 - - [20/Oct/2026:10:40:00 +0530] \"GET /api/todos HTTP/1.1\" 500 512\n10.0.0.3 - - [20/Oct/2026:10:10:00 +0530] \"GET /api/todos HTTP/1.1\" 500 512\n10.0.0.4 - - [20/Oct/2026:10:11:00 +0530] \"GET /api/todos HTTP/1.1\" 200 512\n10.0.0.1 - - [20/Oct/2026:10:12:00 +0530] \"GET /api/todos HTTP/1.1\" 200 512\n     1\t10.0.0.2 - - [20/Oct/2026:10:01:00 +0530] \"GET /api/todos HTTP/1.1\" 200 512\n     2\t10.0.0.3 - - [20/Oct/2026:10:02:00 +0530] \"GET /api/todos HTTP/1.1\" 200 512\n     3\t10.0.0.4 - - [20/Oct/2026:10:03:00 +0530] \"GET /favicon.ico HTTP/1.1\" 404 512",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Running `cat` on a huge log. The terminal fills with text and the user cannot read it. Use `head`, `tail` or `less`.",
+        "Writing `head -3n file`. The correct form is `head -n 3 file` (or the short `head -3 file`).",
+        "Expecting `wc -l < file` to print the file name. With `<` it prints only the number (useful in scripts)."
+      ],
+      "interview_say": "For a big log I never use `cat`. I use `wc -l` to see the size, `head` and `tail` to see the start and the end, and `less` to scroll and search.",
+      "try_yourself": "Run `wc -l < var/log/nginx/access.log` and `wc -c var/log/nginx/access.log`. What is different?"
+    },
+    {
+      "id": "d02p02",
+      "title": "Watch a log live with tail -f",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The frontend pod restarts again and again. The user wants to see new log lines the moment they are written, while a teammate tests the app.",
+      "task": [
+        "Open a **second** terminal window. In it, run `tail -f ~/bash-practice/day02/var/log/frontend.log`.",
+        "In the first terminal, add a line: `echo \"2026-10-20 10:15:00 ERROR cannot reach api\" >> var/log/frontend.log`.",
+        "Watch the new line appear in the second terminal. Stop `tail -f` with `Ctrl+C`.",
+        "Now show only the last 3 lines once: `tail -n 3 var/log/frontend.log`.",
+        "Open the log in `less`. Press `G` (end), `g` (start), `/ERROR` (search), `n` (next match), `q` (quit)."
+      ],
+      "hints": [
+        "`-f` means follow: tail keeps the file open and prints new lines.",
+        "`>>` adds to the end of a file. `>` would delete the old content first.",
+        "Stop a running command with `Ctrl+C`. In `less`, `q` quits."
+      ],
+      "solution": [
+        "# Terminal 2 (keeps running until Ctrl+C):",
+        "#   tail -f ~/bash-practice/day02/var/log/frontend.log",
+        "# Here we start it in the background for 2 seconds to show the effect:",
+        "tail -n 0 -f var/log/frontend.log &",
+        "TAIL_PID=$!",
+        "sleep 1",
+        "echo \"2026-10-20 10:15:00 ERROR cannot reach api\" >> var/log/frontend.log",
+        "sleep 1",
+        "kill \"$TAIL_PID\"                      # same as pressing Ctrl+C in terminal 2",
+        "echo \"--- last 3 lines ---\"",
+        "tail -n 3 var/log/frontend.log"
+      ],
+      "explanation": [
+        {
+          "part": "tail -f file",
+          "meaning": "Follow the file. New lines are printed as soon as they are written."
+        },
+        {
+          "part": "-n 0",
+          "meaning": "Start with 0 old lines, only show new ones."
+        },
+        {
+          "part": "&",
+          "meaning": "Run in the background, so the script can continue. The user does not need this in a second terminal."
+        },
+        {
+          "part": "$!",
+          "meaning": "Process ID of the last background command."
+        },
+        {
+          "part": ">> file",
+          "meaning": "Append: add the line at the end of the file."
+        },
+        {
+          "part": "less",
+          "meaning": "Scroll a file page by page. `G` end, `g` start, `/word` search, `n` next, `q` quit."
+        }
+      ],
+      "expected_output": "2026-10-20 10:15:00 ERROR cannot reach api\n--- last 3 lines ---\n2026-10-20 10:03:10 INFO  GET /\n2026-10-20 10:04:55 WARN  api slow (2.1 s)\n2026-10-20 10:15:00 ERROR cannot reach api",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `>` instead of `>>`. The whole log is replaced by one line.",
+        "Closing the terminal window to stop `tail -f`. Use `Ctrl+C`.",
+        "Using `tail -f` on a log that is rotated (renamed). Use `tail -F` (capital F) to follow the new file after rotation."
+      ],
+      "interview_say": "I use `tail -f` to watch a log live while I reproduce the problem. For logs that rotate I use `tail -F`. In Kubernetes the same idea is `kubectl logs -f`.",
+      "try_yourself": "Run `tail -f var/log/frontend.log | grep ERROR` in terminal 2, then add an INFO line and an ERROR line from terminal 1. Which ones appear?"
+    },
+    {
+      "id": "d02p03",
+      "title": "Find the errors with grep",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The backend lost its database connection this morning. The user must show the team only the error lines, count them, and see what happened just before the first error.",
+      "task": [
+        "Show all lines with `ERROR` in `var/log/backend.log`.",
+        "Count them with `grep -c`.",
+        "Show the line numbers of the WARN lines with `grep -n`.",
+        "Show lines that do **not** contain `INFO` with `grep -v`.",
+        "Search for `error` without caring about upper or lower case (`-i`), and count."
+      ],
+      "hints": [
+        "`grep WORD file` prints matching lines.",
+        "`-c` counts, `-n` adds line numbers, `-v` inverts (non-matching lines), `-i` ignores case.",
+        "`grep -c ERROR var/log/backend.log`, `grep -n WARN ...`, `grep -v INFO ...`, `grep -ic error ...`."
+      ],
+      "solution": [
+        "grep ERROR var/log/backend.log",
+        "grep -c ERROR var/log/backend.log",
+        "grep -n WARN var/log/backend.log",
+        "grep -v INFO var/log/backend.log",
+        "grep -ic error var/log/backend.log"
+      ],
+      "explanation": [
+        {
+          "part": "grep ERROR file",
+          "meaning": "Print lines that contain the text `ERROR` (case-sensitive)."
+        },
+        {
+          "part": "-c",
+          "meaning": "Print only the number of matching lines."
+        },
+        {
+          "part": "-n",
+          "meaning": "Show the line number before each match."
+        },
+        {
+          "part": "-v",
+          "meaning": "Invert: show lines that do NOT match."
+        },
+        {
+          "part": "-i",
+          "meaning": "Ignore case: `error`, `Error` and `ERROR` all match."
+        }
+      ],
+      "expected_output": "2026-10-20 10:07:40 ERROR database connection lost\n2026-10-20 10:07:46 ERROR database connection lost\n2\n3:2026-10-20 10:05:12 WARN  slow query: 1200 ms\n8:2026-10-20 10:12:03 WARN  slow query: 950 ms\n2026-10-20 10:05:12 WARN  slow query: 1200 ms\n2026-10-20 10:07:40 ERROR database connection lost\n2026-10-20 10:07:46 ERROR database connection lost\n2026-10-20 10:12:03 WARN  slow query: 950 ms\n2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Wrong case: `grep error var/log/backend.log` prints nothing, because the log uses `ERROR`. Add `-i`.",
+        "Putting the file first: `grep var/log/backend.log ERROR` gives `grep: ERROR: No such file or directory`. The pattern comes first.",
+        "Thinking `grep -c` counts words. It counts lines. Two errors on one line count as 1."
+      ],
+      "checks": [
+        {
+          "run": "grep var/log/backend.log ERROR",
+          "expect": "grep: ERROR: No such file or directory"
+        }
+      ],
+      "interview_say": "I use `grep` to filter logs: `-i` to ignore case, `-v` to remove noise, `-n` for line numbers and `-c` to count. Day 10 adds context options like `-B` and `-A`.",
+      "try_yourself": "Run `grep -B 1 ERROR var/log/backend.log`. What does `-B 1` add? Try `-A 1` too."
+    },
+    {
+      "id": "d02p04",
+      "title": "Unique server names: sort and uniq",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Three teams sent lists of servers that need a security patch. The lists were joined into `servers.txt`, so some names repeat. The user needs a clean list and wants to know which servers were reported more than once.",
+      "task": [
+        "Show `servers.txt` with `cat`.",
+        "Print the names sorted A-Z.",
+        "Print each name only once (sorted).",
+        "Print how many times each name appears (use `uniq -c`).",
+        "Show only the names that appear more than once (use `uniq -d`)."
+      ],
+      "hints": [
+        "`uniq` only removes repeats that are next to each other. So sort first.",
+        "`sort file | uniq` or simply `sort -u file`.",
+        "`sort servers.txt | uniq -c` counts; `sort servers.txt | uniq -d` shows duplicates only."
+      ],
+      "solution": [
+        "cat servers.txt",
+        "echo \"--- sorted ---\"",
+        "sort servers.txt",
+        "echo \"--- unique ---\"",
+        "sort -u servers.txt",
+        "echo \"--- count ---\"",
+        "sort servers.txt | uniq -c",
+        "echo \"--- reported more than once ---\"",
+        "sort servers.txt | uniq -d"
+      ],
+      "explanation": [
+        {
+          "part": "sort",
+          "meaning": "Sort lines alphabetically (A-Z)."
+        },
+        {
+          "part": "sort -u",
+          "meaning": "Sort and keep each line once."
+        },
+        {
+          "part": "uniq -c",
+          "meaning": "Count each group of equal lines. The count comes first."
+        },
+        {
+          "part": "uniq -d",
+          "meaning": "Print only lines that repeat."
+        }
+      ],
+      "expected_output": "web-02\ndb-01\nweb-01\nweb-02\ncache-01\nweb-01\ndb-01\nweb-03\n--- sorted ---\ncache-01\ndb-01\ndb-01\nweb-01\nweb-01\nweb-02\nweb-02\nweb-03\n--- unique ---\ncache-01\ndb-01\nweb-01\nweb-02\nweb-03\n--- count ---\n      1 cache-01\n      2 db-01\n      2 web-01\n      2 web-02\n      1 web-03\n--- reported more than once ---\ndb-01\nweb-01\nweb-02",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Running `uniq servers.txt` without sorting. `web-02` stays twice because the two copies are not next to each other.",
+        "Expecting `uniq -c` output to be sorted by count. Add `| sort -rn` for that (Day 12)."
+      ],
+      "interview_say": "`uniq` only removes neighbour duplicates, so I always `sort` first. `sort | uniq -c | sort -rn` is my standard way to count things, like IPs in a log.",
+      "try_yourself": "Run `sort servers.txt | uniq -u`. What does `-u` on uniq show?"
+    },
+    {
+      "id": "d02p05",
+      "title": "What changed in the config? diff",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "After a deploy, the backend cannot reach the database. Someone changed the config. The user has the old file `app-v1.conf` and the new file `app-v2.conf` and must find the exact changes.",
+      "task": [
+        "Compare the two files with `diff app-v1.conf app-v2.conf`.",
+        "Compare again with `diff -u` (the format used by git).",
+        "Check the exit code with `echo $?` right after `diff`."
+      ],
+      "hints": [
+        "In plain `diff`, `<` lines come from the first file and `>` lines from the second file.",
+        "In `diff -u`, `-` means removed and `+` means added.",
+        "`diff` exits with 0 when the files are the same and 1 when they are different."
+      ],
+      "solution": [
+        "diff app-v1.conf app-v2.conf",
+        "echo \"exit code: $?\"",
+        "diff -u app-v1.conf app-v2.conf | tail -n +3    # skip the 2 header lines with dates"
+      ],
+      "explanation": [
+        {
+          "part": "diff a b",
+          "meaning": "Show lines that are different. `2,3c2,3` means lines 2-3 were changed (c = change)."
+        },
+        {
+          "part": "< / >",
+          "meaning": "`<` = line from the first file, `>` = line from the second file."
+        },
+        {
+          "part": "$?",
+          "meaning": "Exit code of diff: 0 = same, 1 = different, 2 = error (for example a missing file)."
+        },
+        {
+          "part": "diff -u",
+          "meaning": "Unified format, like `git diff`: `-` removed, `+` added, with some lines around for context."
+        },
+        {
+          "part": "tail -n +3",
+          "meaning": "Print from line 3 to the end. Here it hides the header with file dates."
+        }
+      ],
+      "expected_output": "2,3c2,3\n< db_host=db.internal\n< db_pool=10\n---\n> db_host=db-new.internal\n> db_pool=20\nexit code: 1\n@@ -1,5 +1,5 @@\n port=8080\n-db_host=db.internal\n-db_pool=10\n+db_host=db-new.internal\n+db_pool=20\n log_level=info\n cache=on",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Thinking exit code 1 from `diff` means the command failed. For `diff`, 1 only means \"files are different\". In a script with `set -e`, this stops the script.",
+        "Mixing up the order. `diff old new` shows `>` for the new lines. Always put the old file first."
+      ],
+      "interview_say": "I compare configs with `diff -u old new`. The changed lines show the bug quickly; here `db_host` and `db_pool` changed.",
+      "try_yourself": "Run `diff app-v1.conf app-v1.conf; echo $?`. Then try `diff app-v1.conf nofile.conf; echo $?`."
+    },
+    {
+      "id": "d02p06",
+      "title": "Find the bug: the log report script",
+      "type": "fix-bug",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate wrote `report.sh` to print the last 5 lines of the backend log and the number of errors. It hangs, and the error count looks wrong.",
+      "task": [
+        "Look at the script with `cat report.sh`. Do **not** run it yet (it waits for input forever).",
+        "Find 2 bugs: one variable name problem and one wrong pipe.",
+        "Fix the script and run it with `bash report.sh`."
+      ],
+      "hints": [
+        "Bash variable names are case-sensitive. `LOG` and `log` are two different variables.",
+        "When `$log` is empty, the command is just `tail -5`, which reads from the keyboard and waits.",
+        "In a pipe, `wc -l` must read from the pipe, so do not give it a file name: `grep ERROR file | wc -l`, or use `grep -c`."
+      ],
+      "solution": [
+        "cat > report.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Print the last 5 lines of the backend log and count ERROR lines",
+        "LOG=var/log/backend.log",
+        "tail -5 \"$LOG\"",
+        "echo \"Errors:\"",
+        "grep -c ERROR \"$LOG\"",
+        "EOF",
+        "bash report.sh"
+      ],
+      "explanation": [
+        {
+          "part": "\"$LOG\"",
+          "meaning": "Bug 1: the script set `LOG` but used `$log`. The empty variable made `tail` wait for keyboard input. Quotes also protect paths with spaces."
+        },
+        {
+          "part": "grep -c ERROR \"$LOG\"",
+          "meaning": "Bug 2: `wc -l file` ignored the pipe and counted all lines of the file. `grep -c` counts only matching lines."
+        }
+      ],
+      "expected_output": "2026-10-20 10:07:40 ERROR database connection lost\n2026-10-20 10:07:41 INFO  retrying connection\n2026-10-20 10:07:46 ERROR database connection lost\n2026-10-20 10:07:51 INFO  connected to database\n2026-10-20 10:12:03 WARN  slow query: 950 ms\nErrors:\n2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Running the broken script: it hangs with no message. Press `Ctrl+C` to stop it.",
+        "Counting with `wc -l var/log/backend.log` after the pipe: the output is `8 var/log/backend.log`, the total lines, not the errors."
+      ],
+      "checks": [
+        {
+          "run": "tail -5 var/log/backend.log >/dev/null; wc -l var/log/backend.log",
+          "expect": "8 var/log/backend.log"
+        }
+      ],
+      "interview_say": "Variable names in bash are case-sensitive, and an empty variable can change a command completely. I use ShellCheck and `set -u` to catch this.",
+      "try_yourself": "Add `set -u` as the second line of the broken script and run it. What error do you get now?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "What is the difference between `head`, `tail` and `tail -f`?",
+      "a": "`head` shows the first lines, `tail` the last lines, and `tail -f` keeps the file open and prints new lines as they are written.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you count the error lines in a log file?",
+      "a": "`grep -c ERROR app.log`. Or `grep ERROR app.log | wc -l`.",
+      "topic": "Text"
+    },
+    {
+      "q": "Why do we use `sort` before `uniq`?",
+      "a": "`uniq` only removes duplicate lines that are next to each other. `sort` puts equal lines together first.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you see what changed between two config files?",
+      "a": "`diff -u old.conf new.conf`. Lines with `-` were removed and lines with `+` were added.",
+      "topic": "Text"
+    },
+    {
+      "q": "Why not use `cat` for a 2 GB log file?",
+      "a": "It prints everything to the screen and is slow. `less` lets the user scroll and search, and `tail` or `grep` show only the useful part.",
+      "topic": "Text"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "cat",
+      "meaning": "Print a whole (small) file",
+      "example": "cat servers.txt",
+      "topic": "Text"
+    },
+    {
+      "cmd": "less",
+      "meaning": "Scroll and search a file (q quits)",
+      "example": "less /var/log/syslog",
+      "topic": "Text"
+    },
+    {
+      "cmd": "head -n N",
+      "meaning": "First N lines",
+      "example": "head -n 3 access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "tail -n N",
+      "meaning": "Last N lines",
+      "example": "tail -n 20 app.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "tail -f",
+      "meaning": "Follow a log live (Ctrl+C stops)",
+      "example": "tail -f backend.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "tail -n +N",
+      "meaning": "From line N to the end",
+      "example": "tail -n +2 data.csv",
+      "topic": "Text"
+    },
+    {
+      "cmd": "wc -l",
+      "meaning": "Count lines",
+      "example": "wc -l access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "nl",
+      "meaning": "Print with line numbers",
+      "example": "nl app.conf",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -c / -n / -v / -i",
+      "meaning": "Count / line numbers / invert / ignore case",
+      "example": "grep -ic error app.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sort",
+      "meaning": "Sort lines A-Z",
+      "example": "sort servers.txt",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sort -u",
+      "meaning": "Sort and remove duplicates",
+      "example": "sort -u servers.txt",
+      "topic": "Text"
+    },
+    {
+      "cmd": "uniq -c",
+      "meaning": "Count equal neighbour lines",
+      "example": "sort ips | uniq -c",
+      "topic": "Text"
+    },
+    {
+      "cmd": "uniq -d",
+      "meaning": "Show only repeated lines",
+      "example": "sort servers.txt | uniq -d",
+      "topic": "Text"
+    },
+    {
+      "cmd": "diff -u",
+      "meaning": "Show changes between two files",
+      "example": "diff -u old.conf new.conf",
+      "topic": "Text"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "cat",
+      "problems": [
+        "d02p04"
+      ]
+    },
+    {
+      "item": "less",
+      "problems": [
+        "d02p02"
+      ]
+    },
+    {
+      "item": "head, tail",
+      "problems": [
+        "d02p01",
+        "d02p02"
+      ]
+    },
+    {
+      "item": "tail -f",
+      "problems": [
+        "d02p02"
+      ]
+    },
+    {
+      "item": "wc",
+      "problems": [
+        "d02p01",
+        "d02p06"
+      ]
+    },
+    {
+      "item": "grep basics",
+      "problems": [
+        "d02p03",
+        "d02p06"
+      ]
+    },
+    {
+      "item": "diff",
+      "problems": [
+        "d02p05"
+      ]
+    },
+    {
+      "item": "sort, uniq",
+      "problems": [
+        "d02p04"
+      ]
+    },
+    {
+      "item": "nl",
+      "problems": [
+        "d02p01"
+      ]
+    },
+    {
+      "item": "Reading /var/log-style logs",
+      "problems": [
+        "d02p01",
+        "d02p02",
+        "d02p03"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day02"
+}

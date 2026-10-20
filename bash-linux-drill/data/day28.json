@@ -1,0 +1,658 @@
+{
+  "day": 28,
+  "week": 4,
+  "review_day": true,
+  "title": "Final mock interview and capstone",
+  "goal": "Prove it under interview conditions: three whiteboard scripts, one final bug hunt, 30 rapid-fire questions, 6 troubleshooting scenarios, and the final checklist.",
+  "minutes": 90,
+  "interview_minutes": 20,
+  "setup": [
+    "mkdir -p ~/bash-practice/day28 && cd ~/bash-practice/day28",
+    "# W1: a small access log (combined format, one broken line)",
+    "for i in $(seq 1 40); do",
+    "  case $(( i % 5 )) in 0) ip=10.0.0.5 ;; 1) ip=10.0.0.7 ;; 2) ip=192.168.1.20 ;; 3) ip=10.0.0.5 ;; 4) ip=172.16.0.3 ;; esac",
+    "  case $(( i % 6 )) in 0) st=500 ;; 3) st=503 ;; *) st=200 ;; esac",
+    "  printf '%s - - [20/Oct/2026:11:%02d:00 +0530] \"GET /api/todos HTTP/1.1\" %s 512 \"-\" \"curl/8.5.0\"\\n' \"$ip\" \"$i\" \"$st\"",
+    "done > access.log",
+    "echo '203.0.113.99 - - [20/Oct/2026:11:59:00 +0530] \"-\" 400 0 \"-\" \"-\"' >> access.log",
+    "# W2: data to back up",
+    "mkdir -p app-data/uploads",
+    "echo 'todo list' > app-data/todos.csv",
+    "echo 'avatar' > app-data/uploads/u1.png",
+    "# W3: a list of URLs to check, and a tiny site",
+    "mkdir -p site",
+    "echo '{\"status\":\"UP\"}' > site/health.json",
+    "echo '<h1>Todo</h1>' > site/index.html",
+    "printf '%s\\n' '# service checks' 'http://127.0.0.1:8151/health.json' 'http://127.0.0.1:8151/index.html' '' 'http://127.0.0.1:8151/missing' 'http://127.0.0.1:8159/' > urls.txt",
+    "# P4: the take-home script with bugs from all four weeks",
+    "printf '%s\\n' 'C:\\temp\\export' '/var/log/todo' > paths.txt",
+    "printf '%s\\n' '#!/bin/bash' '# take-home.sh: for each path in paths.txt print \"path: <path>\" exactly as written,' '# count the lines of access.log that have status 500 or 503,' '# and append one summary line per run to summary.log. Exit 1 if access.log is missing.' 'LOG=access.log' 'if [-f $LOG]; then echo \"log found\"; else echo \"no log\"; exit 1; fi' 'while read p; do echo \"path: $p\"; done < paths.txt' 'count_errors() { return $(grep -cE \" 50[03] \" $LOG); }' 'count_errors' 'ERRORS=$?' 'echo \"$(date +%F) errors=$ERRORS\" > summary.log' 'echo \"errors: $ERRORS\"' > take-home.sh",
+    "cd ~/bash-practice/day28"
+  ],
+  "warmup": [
+    {
+      "q": "How does a shell step tell Jenkins it failed?",
+      "a": "With a non-zero exit code. Nothing else counts.",
+      "from_day": 27
+    },
+    {
+      "q": "Which exit codes do Nagios-style checks use?",
+      "a": "0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.",
+      "from_day": 25
+    },
+    {
+      "q": "What is the order of checks when you cannot SSH to a server?",
+      "a": "Name (DNS), then port/network (`nc -zv host 22`), then key, user and permissions, then `ssh -v` and the server's auth log.",
+      "from_day": 21
+    },
+    {
+      "q": "Give the classic top-IPs pipeline.",
+      "a": "`awk '{print $1}' access.log | sort | uniq -c | sort -rn | head`",
+      "from_day": 14
+    }
+  ],
+  "problems": [
+    {
+      "id": "d28p01",
+      "title": "Whiteboard 1: top IPs that got server errors",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Interviewer: \"Write a script that takes an Nginx access log and prints the N client IPs that received the most 5xx errors. Handle bad input.\" Write it on paper first (8 minutes), then type and test it.",
+      "task": [
+        "Usage: `top-errors.sh LOGFILE [N]`, N defaults to 3. Wrong usage → message to stderr, exit 2.",
+        "If the file cannot be read → error, exit 1.",
+        "Parse robustly (split at the quotes), keep only 5xx, count per IP, biggest first, top N.",
+        "Test: normal run, `N=1`, a missing file, and no arguments."
+      ],
+      "hints": [
+        "Start with `set -euo pipefail` and `LOG=${1:-}`.",
+        "`awk -F'\"' '{split($1, f, \" \"); split($3, a, \" \"); if (a[1] >= 500) print f[1]}'`",
+        "`| sort | uniq -c | sort -rn | head -n \"$N\"`"
+      ],
+      "solution": [
+        "cat > top-errors.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: top-errors.sh LOGFILE [N]   - top N client IPs by number of 5xx responses",
+        "set -euo pipefail",
+        "LOG=${1:-}; N=${2:-3}",
+        "[ -n \"$LOG\" ] || { echo \"usage: top-errors.sh LOGFILE [N]\" >&2; exit 2; }",
+        "[[ $N =~ ^[0-9]+$ ]] || { echo \"error: N must be a number\" >&2; exit 2; }",
+        "[ -r \"$LOG\" ] || { echo \"error: cannot read $LOG\" >&2; exit 1; }",
+        "awk -F'\"' '{ split($1, f, \" \"); split($3, a, \" \"); if (a[1] >= 500) print f[1] }' \"$LOG\" \\",
+        "  | sort | uniq -c | sort -rn | head -n \"$N\"",
+        "EOF",
+        "bash top-errors.sh access.log; echo \"exit code: $?\"",
+        "bash top-errors.sh access.log 1; echo \"exit code: $?\"",
+        "bash top-errors.sh nope.log; echo \"exit code: $?\"",
+        "bash top-errors.sh; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "set -euo pipefail",
+          "meaning": "Safe defaults: say this out loud in the interview (Day 22)."
+        },
+        {
+          "part": "usage → exit 2, missing file → exit 1",
+          "meaning": "Different codes for wrong usage and runtime errors (Day 6)."
+        },
+        {
+          "part": "awk -F'\"' + split",
+          "meaning": "Robust parsing of combined logs; field 1 starts with the IP (Day 23)."
+        },
+        {
+          "part": "sort | uniq -c | sort -rn | head",
+          "meaning": "The counting pipeline (Day 12)."
+        },
+        {
+          "part": "\"$LOG\" and \"$N\"",
+          "meaning": "Quote every variable (Day 5)."
+        }
+      ],
+      "expected_output": "      5 10.0.0.5\n      3 172.16.0.3\n      3 10.0.0.7\nexit code: 0\n      5 10.0.0.5\nexit code: 0\nerror: cannot read nope.log\nexit code: 1\nusage: top-errors.sh LOGFILE [N]\nexit code: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing the pipeline but no input checks: interviewers want to see usage messages and exit codes.",
+        "Using `$9` for the status: mention why splitting at quotes is safer."
+      ],
+      "interview_say": "I start with set -euo pipefail, check the arguments and the file, parse the log by splitting at the quotes, filter 5xx, then count with sort, uniq -c, sort -rn and head. Bad usage exits 2, a missing file exits 1.",
+      "try_yourself": "Add a `-s CODE` option to count one exact status code instead of all 5xx."
+    },
+    {
+      "id": "d28p02",
+      "title": "Whiteboard 2: back up a folder, keep the last 3",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Interviewer: \"Write a backup script for a folder: a timestamped tar.gz, keep only the last 3 backups, and fail clearly if something goes wrong.\" The answer stays short and correct; extras (checksum, S3, lock) can be mentioned at the end.",
+      "task": [
+        "Usage: `backup-keep.sh SRC DEST [KEEP]`, KEEP defaults to 3.",
+        "Create `DEST/NAME-YYYYmmdd-HHMMSS.tar.gz` (allow `STAMP` from the environment for tests).",
+        "Delete all but the newest KEEP backups of that source.",
+        "Test with 5 runs (different STAMPs), then show what is left. Test a missing source."
+      ],
+      "hints": [
+        "`STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}`",
+        "`tar -czf \"$DEST/$NAME-$STAMP.tar.gz\" -C \"$SRC\" .`",
+        "`ls -1 \"$DEST\"/\"$NAME\"-*.tar.gz | sort | head -n -\"$KEEP\" | xargs -r rm --`"
+      ],
+      "solution": [
+        "cat > backup-keep.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: backup-keep.sh SRC DEST [KEEP]",
+        "set -euo pipefail",
+        "SRC=${1:?usage: backup-keep.sh SRC DEST [KEEP]}; DEST=${2:?usage: backup-keep.sh SRC DEST [KEEP]}; KEEP=${3:-3}",
+        "[ -d \"$SRC\" ] || { echo \"error: $SRC is not a folder\" >&2; exit 1; }",
+        "mkdir -p \"$DEST\"",
+        "NAME=$(basename \"$SRC\")",
+        "STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}",
+        "tar -czf \"$DEST/$NAME-$STAMP.tar.gz\" -C \"$SRC\" .",
+        "echo \"created $NAME-$STAMP.tar.gz\"",
+        "ls -1 \"$DEST\"/\"$NAME\"-*.tar.gz | sort | head -n -\"$KEEP\" | xargs -r rm -v --",
+        "EOF",
+        "for d in 16 17 18 19 20; do",
+        "  STAMP=202610$d-023000 bash backup-keep.sh app-data backups 3",
+        "done",
+        "ls backups",
+        "bash backup-keep.sh missing-dir backups; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "${1:?usage}",
+          "meaning": "Required arguments with a usage message (Day 13)."
+        },
+        {
+          "part": "STAMP from env",
+          "meaning": "Real time normally, fixed time in tests (Day 24)."
+        },
+        {
+          "part": "tar -czf ... -C SRC .",
+          "meaning": "Pack the folder contents (Day 20)."
+        },
+        {
+          "part": "sort | head -n -KEEP | xargs -r rm",
+          "meaning": "Keep the newest by name; `-r` = nothing to do is not an error (Day 24)."
+        },
+        {
+          "part": "say the extras",
+          "meaning": "Checksums, a restore test, a lock (flock), off-site copy to S3, cron with a log, alert on failure."
+        }
+      ],
+      "expected_output": "created app-data-20261016-023000.tar.gz\ncreated app-data-20261017-023000.tar.gz\ncreated app-data-20261018-023000.tar.gz\ncreated app-data-20261019-023000.tar.gz\nremoved 'backups/app-data-20261016-023000.tar.gz'\ncreated app-data-20261020-023000.tar.gz\nremoved 'backups/app-data-20261017-023000.tar.gz'\napp-data-20261018-023000.tar.gz  app-data-20261020-023000.tar.gz\napp-data-20261019-023000.tar.gz\nerror: missing-dir is not a folder\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Rotating with `ls -t`: file times change when backups are copied or restored (Day 24).",
+        "Forgetting to mention the restore test: a backup is only good if it can be restored."
+      ],
+      "interview_say": "My backup script makes a timestamped tar.gz, keeps the newest N by sorting the names, and stops on errors with set -e and clear messages. In production I add a checksum, a lock, an S3 copy and a regular restore test.",
+      "try_yourself": "Add a checksum file for each backup and remove it together with the old archive."
+    },
+    {
+      "id": "d28p03",
+      "title": "Whiteboard 3: check a list of URLs",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Interviewer: \"We have a file with one URL per line. Write a script that checks each one and reports which are down. It runs in cron, so it must not hang, and the exit code must show if anything is down.\"",
+      "task": [
+        "Read `urls.txt` line by line, skipping empty lines and comments.",
+        "For each URL: `curl -fsS -o /dev/null --max-time 3`, with 2 tries. Print `UP` or `DOWN` and the URL.",
+        "At the end print the number of DOWN URLs. Exit 1 if any are down, else 0.",
+        "Test against the local test server on port 8151 (one URL points to a closed port)."
+      ],
+      "hints": [
+        "`while IFS= read -r url; do [[ -z $url || $url == \\#* ]] && continue; ... done < \"$FILE\"`",
+        "Two tries: `curl ... || { sleep 1; curl ...; }`",
+        "Count with `DOWN=$((DOWN + 1))`; the loop reads from the file, so the counter survives (Day 8)."
+      ],
+      "solution": [
+        "cat > check-urls.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: check-urls.sh URL_FILE   - exit 0 if all URLs are up, 1 if any is down",
+        "set -uo pipefail",
+        "FILE=${1:?usage: check-urls.sh URL_FILE}",
+        "[ -r \"$FILE\" ] || { echo \"error: cannot read $FILE\" >&2; exit 2; }",
+        "check() { curl -fsS -o /dev/null --max-time 3 \"$1\" 2>/dev/null; }",
+        "DOWN=0",
+        "while IFS= read -r url; do",
+        "  [[ -z $url || $url == \\#* ]] && continue",
+        "  if check \"$url\" || { sleep 1; check \"$url\"; }; then",
+        "    printf 'UP    %s\\n' \"$url\"",
+        "  else",
+        "    printf 'DOWN  %s\\n' \"$url\"; DOWN=$((DOWN + 1))",
+        "  fi",
+        "done < \"$FILE\"",
+        "echo \"down: $DOWN\"",
+        "[ \"$DOWN\" -eq 0 ]",
+        "EOF",
+        "python3 -m http.server 8151 --bind 127.0.0.1 --directory site > /dev/null 2>&1 &",
+        "SRV=$!",
+        "sleep 1",
+        "bash check-urls.sh urls.txt; echo \"exit code: $?\"",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "set -uo pipefail (no -e)",
+          "meaning": "A down URL is expected; the script must check all of them (Day 25)."
+        },
+        {
+          "part": "while IFS= read -r url; ... done < file",
+          "meaning": "Safe line reading; the counter is kept (Day 8)."
+        },
+        {
+          "part": "skip empty and # lines",
+          "meaning": "Config files have comments and blank lines (Day 10)."
+        },
+        {
+          "part": "curl -fsS --max-time 3",
+          "meaning": "Fail on HTTP errors, never hang (Day 18)."
+        },
+        {
+          "part": "check || { sleep 1; check; }",
+          "meaning": "One retry against short glitches (Day 27)."
+        },
+        {
+          "part": "[ \"$DOWN\" -eq 0 ]",
+          "meaning": "The last command sets the exit code: 0 if none are down, 1 otherwise."
+        }
+      ],
+      "expected_output": "UP    http://127.0.0.1:8151/health.json\nUP    http://127.0.0.1:8151/index.html\nDOWN  http://127.0.0.1:8151/missing\nDOWN  http://127.0.0.1:8159/\ndown: 2\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "No timeout: one hanging server blocks the whole cron run.",
+        "Reading the file with `for url in $(cat urls.txt)`: comments and spaces break it."
+      ],
+      "interview_say": "I read the URL file with `while IFS= read -r`, skip comments, check each URL with `curl -fsS --max-time` and one retry, print UP or DOWN, and exit 1 if any URL is down so cron or CI can alert.",
+      "try_yourself": "Check the URLs in parallel with `xargs -P 4` (Day 12). How do you count the DOWN ones then?"
+    },
+    {
+      "id": "d28p04",
+      "title": "Final bug hunt: the take-home script",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The last task of a take-home test: `take-home.sh` has bugs from all four weeks. The goal is in the comments. Find them by running the script, reading the errors, and reading the code line by line.",
+      "task": [
+        "Run `bash take-home.sh` and compare the output with the comments.",
+        "Find 5 bugs: the test brackets, the read options, the function result, the log redirect, and the missing quotes.",
+        "Fix them. Run the script twice and show `summary.log`."
+      ],
+      "hints": [
+        "`[-f $LOG]` needs spaces: `[ -f \"$LOG\" ]`.",
+        "The Windows path lost its backslashes: `while IFS= read -r p`.",
+        "`return $(grep -c ...)` is an exit code (0-255), and `>` replaces the log each run. Use `echo` + `$( )`, and `>>`."
+      ],
+      "solution": [
+        "bash take-home.sh",
+        "cat > take-home.sh <<'EOF'",
+        "#!/bin/bash",
+        "# take-home.sh: for each path in paths.txt print \"path: <path>\" exactly as written,",
+        "# count the lines of access.log that have status 500 or 503,",
+        "# and append one summary line per run to summary.log. Exit 1 if access.log is missing.",
+        "set -euo pipefail",
+        "LOG=access.log",
+        "if [ -f \"$LOG\" ]; then echo \"log found\"; else echo \"no log\" >&2; exit 1; fi",
+        "while IFS= read -r p; do echo \"path: $p\"; done < paths.txt",
+        "count_errors() { grep -cE '\" 50[03] ' \"$LOG\"; }",
+        "ERRORS=$(count_errors)",
+        "echo \"$(date +%F) errors=$ERRORS\" >> summary.log",
+        "echo \"errors: $ERRORS\"",
+        "EOF",
+        "echo \"--- fixed, run 1 ---\"",
+        "bash take-home.sh",
+        "echo \"--- fixed, run 2 ---\"",
+        "bash take-home.sh > /dev/null",
+        "echo \"summary.log has $(wc -l < summary.log) lines:\"",
+        "cut -d' ' -f2 summary.log"
+      ],
+      "explanation": [
+        {
+          "part": "[ -f \"$LOG\" ]",
+          "meaning": "Bug 1: `[-f` is not a command (Day 6)."
+        },
+        {
+          "part": "IFS= read -r",
+          "meaning": "Bug 2: `read` without `-r` removed the backslashes of `C:\\temp\\export` (Day 8)."
+        },
+        {
+          "part": "echo, not return",
+          "meaning": "Bug 3: the count came back as an exit code; with `set -e` that would even stop the script (Day 9)."
+        },
+        {
+          "part": ">> summary.log",
+          "meaning": "Bug 4: `>` kept only the last run (Day 4)."
+        },
+        {
+          "part": "\"$LOG\" and the regex",
+          "meaning": "Bug 5: unquoted variables; also the pattern now matches the status right after the closing quote, not a size like ` 500 ` (Day 10, Day 23)."
+        },
+        {
+          "part": "cut -d' ' -f2",
+          "meaning": "Here only to hide the date column, which changes every day."
+        }
+      ],
+      "expected_output": "take-home.sh: line 6: [-f: command not found\nno log\n--- fixed, run 1 ---\nlog found\npath: C:\\temp\\export\npath: /var/log/todo\nerrors: 13\n--- fixed, run 2 ---\nsummary.log has 2 lines:\nerrors=13\nerrors=13",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Fixing only the lines that print an error. Bugs 2 to 5 give wrong results without any error message.",
+        "Keeping `return` and adding `set -e`: the script then stops after `count_errors` when the count is not 0."
+      ],
+      "checks": [
+        {
+          "run": "bash take-home.sh",
+          "expect": "[-f: command not found"
+        }
+      ],
+      "interview_say": "I run the script, read the errors, then read every line against the goal. The usual suspects are test syntax, `read -r`, `return` used for data, `>` versus `>>`, and missing quotes. ShellCheck finds several of them automatically.",
+      "try_yourself": "Run `shellcheck take-home.sh` on the original version (Reset and setup again). Which of the 5 bugs does it find?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "Rapid 1: Difference between a hard link and a symlink?",
+      "a": "Hard link: another name for the same data, survives deleting the original, no folders. Symlink: a path to a target, breaks if the target is deleted, works for folders and across disks.",
+      "topic": "Files"
+    },
+    {
+      "q": "Rapid 2: Where are configs, logs and user homes?",
+      "a": "`/etc`, `/var/log`, `/home`.",
+      "topic": "Files"
+    },
+    {
+      "q": "Rapid 3: Show the last 100 lines of a log and follow it?",
+      "a": "`tail -n 100 -f app.log` (`-F` if the log rotates).",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 4: What does `chmod 640` mean?",
+      "a": "Owner read+write, group read, others nothing.",
+      "topic": "Permissions"
+    },
+    {
+      "q": "Rapid 5: Add user `deploy` to group `docker`?",
+      "a": "`sudo usermod -aG docker deploy` (log in again to apply).",
+      "topic": "Permissions"
+    },
+    {
+      "q": "Rapid 6: Send stdout and stderr to one file?",
+      "a": "`cmd > out.log 2>&1` (or `&> out.log`).",
+      "topic": "Redirection"
+    },
+    {
+      "q": "Rapid 7: What is `/dev/null`?",
+      "a": "A special file that discards everything written to it.",
+      "topic": "Redirection"
+    },
+    {
+      "q": "Rapid 8: Single vs double quotes?",
+      "a": "Single: nothing expands. Double: variables and `$( )` expand, spaces stay together.",
+      "topic": "Variables"
+    },
+    {
+      "q": "Rapid 9: What does `export` do?",
+      "a": "Makes a variable visible to child processes.",
+      "topic": "Variables"
+    },
+    {
+      "q": "Rapid 10: `[ ]` vs `[[ ]]`?",
+      "a": "`[ ]` is the POSIX test command (quote variables). `[[ ]]` is bash: safe with empty variables, supports patterns and regex.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 11: What does exit code 127 mean?",
+      "a": "Command not found.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 12: Read a file line by line safely?",
+      "a": "`while IFS= read -r line; do ...; done < file`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 13: `return` vs `echo` in a function?",
+      "a": "`return` sets the exit code (0-255); `echo` returns data, captured with `$(func)`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 14: `\"$@\"` vs `\"$*\"`?",
+      "a": "`\"$@\"`: each argument separate. `\"$*\"`: all arguments as one string.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 15: grep options for: ignore case, count, invert, line numbers?",
+      "a": "`-i`, `-c`, `-v`, `-n`.",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 16: Replace text in a file in place with a backup?",
+      "a": "`sed -i.bak 's/old/new/g' file`.",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 17: Print the 2nd column of a CSV?",
+      "a": "`awk -F, '{print $2}' file.csv` (or `cut -d, -f2`).",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 18: Find files over 100 MB modified more than 30 days ago?",
+      "a": "`find /path -type f -size +100M -mtime +30`.",
+      "topic": "Files"
+    },
+    {
+      "q": "Rapid 19: Get the file name from a path in bash?",
+      "a": "`${path##*/}` (folder: `${path%/*}`).",
+      "topic": "Variables"
+    },
+    {
+      "q": "Rapid 20: `kill` vs `kill -9`?",
+      "a": "`kill` sends SIGTERM (clean stop). `kill -9` sends SIGKILL (immediate, no cleanup). TERM first.",
+      "topic": "Processes"
+    },
+    {
+      "q": "Rapid 21: The letters in `ps aux`?",
+      "a": "a = all users, u = user-oriented format, x = also processes without a terminal.",
+      "topic": "Processes"
+    },
+    {
+      "q": "Rapid 22: Write a crontab line for every day at 02:30.",
+      "a": "`30 2 * * * /opt/backup.sh >> /var/log/backup.log 2>&1`.",
+      "topic": "Services"
+    },
+    {
+      "q": "Rapid 23: Logs of the systemd service nginx, live?",
+      "a": "`journalctl -u nginx -f`.",
+      "topic": "Services"
+    },
+    {
+      "q": "Rapid 24: Disk space vs inodes?",
+      "a": "`df -h` for space, `df -i` for inodes. Either one full gives `No space left on device`.",
+      "topic": "Disk"
+    },
+    {
+      "q": "Rapid 25: Which process listens on port 8080?",
+      "a": "`sudo ss -tulpn | grep :8080` (or `sudo lsof -i :8080`).",
+      "topic": "Networking"
+    },
+    {
+      "q": "Rapid 26: curl options for a script-safe health check?",
+      "a": "`curl -fsS --max-time 5 URL`.",
+      "topic": "Networking"
+    },
+    {
+      "q": "Rapid 27: SSH key permissions?",
+      "a": "`~/.ssh` 700, private key 600, `authorized_keys` 600.",
+      "topic": "SSH"
+    },
+    {
+      "q": "Rapid 28: Create and extract a .tar.gz?",
+      "a": "`tar -czf app.tgz app/` and `tar -xzf app.tgz -C /target`.",
+      "topic": "Packages"
+    },
+    {
+      "q": "Rapid 29: What does `set -euo pipefail` do?",
+      "a": "Exit on errors, error on unset variables, and fail a pipeline if any part fails.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Rapid 30: How do you clean up temp files even when a script fails?",
+      "a": "`TMP=$(mktemp)` plus `trap 'rm -f \"$TMP\"' EXIT`.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Scenario 1: A Kubernetes pod is in CrashLoopBackOff. What do you do?",
+      "a": "`kubectl describe pod NAME` (events, exit code, OOMKilled?), `kubectl logs NAME --previous` (log of the crashed container), check config/secrets/env and the image tag, then fix and roll out; `kubectl rollout undo` if a new release caused it.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario 2: Nginx returns 502 Bad Gateway.",
+      "a": "Nginx is up but the upstream app is not answering. Check the app (`systemctl status` / pod status), the upstream port with `ss -ltn` and `curl localhost:PORT`, and the Nginx error log (`/var/log/nginx/error.log`: connection refused or timeout).",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario 3: The Jenkins job fails at `docker push` with \"denied\" or \"unauthorized\".",
+      "a": "Check the registry login (credentials in Jenkins, token expiry), the image name and repository permissions, and whether the repository exists (for example ECR). Run `docker login` in the job with the stored credential.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario 4: A cron job did not run last night.",
+      "a": "Check that cron runs (`systemctl status cron` / `service cron status`), the crontab (`crontab -l`), the syslog (`grep CRON /var/log/syslog`), the job's own log, the PATH and absolute paths, and `%` signs in the crontab line.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario 5: The app got slow right after a deploy.",
+      "a": "Compare before/after: error rate and latency in the logs or metrics, CPU and memory (`top`, `free -m`), database slow queries, and what changed (`git diff` of the release, config). If users suffer, roll back first, investigate second.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario 6: Users see a TLS certificate error.",
+      "a": "Check the expiry date: `echo | openssl s_client -connect host:443 -servername host 2>/dev/null | openssl x509 -noout -dates`. Renew (for example certbot), check the full chain, reload Nginx, and add an expiry alert.",
+      "topic": "Troubleshooting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "set -euo pipefail",
+      "meaning": "First line after the shebang in every script",
+      "example": "#!/bin/bash; set -euo pipefail",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "${1:?usage} / ${2:-default}",
+      "meaning": "Required and optional arguments",
+      "example": "N=${2:-3}",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "awk -F'\"' ... | sort | uniq -c | sort -rn | head",
+      "meaning": "Count anything in a log",
+      "example": "awk -F'\"' '{split($3,a,\" \"); print a[1]}' access.log | sort | uniq -c",
+      "topic": "Text"
+    },
+    {
+      "cmd": "while IFS= read -r line; do ...; done < file",
+      "meaning": "Read a file safely",
+      "example": "while IFS= read -r url; do ...; done < urls.txt",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "curl -fsS --max-time N",
+      "meaning": "HTTP check that fails correctly",
+      "example": "curl -fsS --max-time 3 \"$url\"",
+      "topic": "Networking"
+    },
+    {
+      "cmd": "tar -czf; sort | head -n -N | xargs -r rm",
+      "meaning": "Backup and keep last N",
+      "example": "ls -1 b-*.tgz | sort | head -n -3 | xargs -r rm --",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "openssl s_client | openssl x509 -noout -dates",
+      "meaning": "Check a TLS certificate's dates",
+      "example": "echo | openssl s_client -connect site:443 -servername site 2>/dev/null | openssl x509 -noout -dates",
+      "topic": "Troubleshooting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Whiteboard script: log analysis",
+      "problems": [
+        "d28p01"
+      ]
+    },
+    {
+      "item": "Whiteboard script: backup and rotation",
+      "problems": [
+        "d28p02"
+      ]
+    },
+    {
+      "item": "Whiteboard script: URL health checks",
+      "problems": [
+        "d28p03"
+      ]
+    },
+    {
+      "item": "Find the bug (all weeks)",
+      "problems": [
+        "d28p04"
+      ]
+    },
+    {
+      "item": "30 rapid-fire questions + 6 troubleshooting scenarios",
+      "problems": []
+    },
+    {
+      "item": "Final checklist",
+      "problems": []
+    }
+  ],
+  "checklist": [
+    "I can explain absolute vs relative paths, and the main folders (/etc, /var/log, /home, /tmp, /usr/bin, /proc).",
+    "I can create, copy, move and delete files and folders safely, and explain hard links vs symlinks.",
+    "I can read and search logs with head, tail -f, less, grep (with -i -v -c -n -A -B -E -o).",
+    "I can read and set permissions with numbers and letters, and explain root vs \"others\".",
+    "I can use >, >>, 2>, 2>&1, /dev/null, pipes, tee and xargs correctly.",
+    "I know single vs double quotes, export, PATH, $(...) and $(( )).",
+    "I can write if/elif/else, [ ] vs [[ ]], file tests, case, and use exit codes.",
+    "I can loop over files and lines safely and use indexed and associative arrays.",
+    "I can write functions with local variables, return data with echo, and parse options with getopts.",
+    "I can process text with sed, awk, cut, tr, sort and uniq, including the top-10 pipeline.",
+    "I can use find with -name, -type, -mtime, -size, -exec and -delete safely.",
+    "I can use parameter expansion for paths and defaults, and create dates and temp files.",
+    "I can find and stop processes correctly (ps, pgrep, kill vs kill -9, nohup, jobs, trap).",
+    "I can schedule jobs with cron and write, check and read a systemd service.",
+    "I can find what fills the disk, check inodes, memory and load, and find deleted-but-open files.",
+    "I can check ports and services with ss, curl and nc, and debug DNS problems.",
+    "I can create SSH keys, fix their permissions, use ~/.ssh/config, and copy files with rsync.",
+    "I can pack and verify releases with tar and sha256sum, and install packages with apt.",
+    "I can troubleshoot: disk full, high CPU, port in use, service will not start, cannot SSH, DNS.",
+    "I start scripts with set -euo pipefail, clean up with trap, use locks, and keep scripts idempotent.",
+    "I can build a log analyzer, a backup with rotation, and a health check with alerts.",
+    "I can use jq, handle secrets safely, and test before reloading (nginx -t).",
+    "I can write CI steps: retry with backoff, wait for a port, git describe versions, deploy with rollback.",
+    "I can say each answer in 1-2 simple sentences, out loud, without notes."
+  ],
+  "reset": "rm -rf ~/bash-practice/day28"
+}

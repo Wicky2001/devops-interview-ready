@@ -1,0 +1,2092 @@
+{
+  "day": 1,
+  "week": 1,
+  "title": "Filesystem and file operations",
+  "goal": "Move around Linux folders with confidence and create, copy, move, link and delete files safely.",
+  "minutes": 90,
+  "needs": [
+    "tree",
+    "shellcheck"
+  ],
+  "setup": [
+    "mkdir -p ~/bash-practice/day01 && cd ~/bash-practice/day01",
+    "# P1: a small to-do app project",
+    "mkdir -p todo-app/backend/src todo-app/backend/logs todo-app/frontend/public",
+    "printf 'DB_HOST=localhost\\nDB_PORT=5432\\n' > todo-app/backend/.env",
+    "printf 'node_modules/\\n*.log\\n' > todo-app/.gitignore",
+    "printf 'console.log(\"todo api\");\\n' > todo-app/backend/src/server.js",
+    "printf '<h1>Todo</h1>\\n' > todo-app/frontend/public/index.html",
+    "printf 'GET /api/todos 200\\n' > todo-app/backend/logs/access.log",
+    "# P3: an old release",
+    "mkdir -p releases/v1.0/backend/config releases/v1.0/frontend/config",
+    "printf 'port: 8080\\nlog_level: info\\n' > releases/v1.0/backend/config/app.yml",
+    "printf 'listen 80;\\n' > releases/v1.0/frontend/config/nginx.conf",
+    "printf 'Release 1.0\\n' > releases/v1.0/README.txt",
+    "# P4: releases for links",
+    "mkdir -p links/releases/v1.1 links/releases/v1.2 links/shared",
+    "echo 'version=1.1' > links/releases/v1.1/app.conf",
+    "echo 'version=1.2' > links/releases/v1.2/app.conf",
+    "echo 'db=todo' > links/shared/db.conf",
+    "# P5: a broken backup script",
+    "mkdir -p wild/logs wild/configs",
+    "for d in 01 02 03 04 05 06 07 08 09; do echo \"log $d\" > wild/logs/app-2026-10-$d.log; done",
+    "echo 'a=1' > wild/configs/api.conf",
+    "echo 'b=2' > wild/configs/web.conf",
+    "printf '%s\\n' '#!/bin/bash' '# Copy October logs 01-05 and all .conf files into backup/2026-10' 'mkdir backup/2026-10' 'cp logs\\app-2026-10-0[1-5].log backup/2026-10/' 'cp configs backup/2026-10/' 'echo \"Backup done\"' > wild/backup-logs.sh",
+    "# P6: names for wildcard practice",
+    "mkdir -p match",
+    "touch match/api-1.log match/api-2.log match/api-10.log match/web-1.log match/notes.txt",
+    "# P7: files to inspect",
+    "mkdir -p inspect",
+    "printf '#!/bin/bash\\necho deploy\\n' > inspect/deploy",
+    "chmod +x inspect/deploy",
+    "printf 'hello\\n' > inspect/readme",
+    "printf 'line one\\nline two\\n' | gzip -n > inspect/old-logs",
+    "printf 'SECRET=demo\\n' > inspect/.env",
+    "touch -d '2026-10-01 09:00' inspect/deploy inspect/readme inspect/old-logs inspect/.env",
+    "cd ~/bash-practice/day01"
+  ],
+  "warmup": [
+    {
+      "q": "What does the first line `#!/bin/bash` in a script do?",
+      "a": "It is the shebang. It tells Linux which program runs the script (here: bash).",
+      "from_day": 0
+    },
+    {
+      "q": "Which command makes `deploy.sh` executable?",
+      "a": "`chmod +x deploy.sh`",
+      "from_day": 0
+    },
+    {
+      "q": "What is `PATH`?",
+      "a": "A variable with a list of folders, separated by `:`. Bash searches these folders when the user types a command name.",
+      "from_day": 0
+    },
+    {
+      "q": "What does `$?` hold?",
+      "a": "The exit code of the last command. `0` means success. Any other number means an error.",
+      "from_day": 0
+    }
+  ],
+  "problems": [
+    {
+      "id": "d01p01",
+      "title": "Move around a project: paths, cd and hidden files",
+      "type": "command",
+      "topic": "Files",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Every Linux task starts with moving between folders. On a new server, a DevOps engineer must always know where they are, how to go up and down, and how to see hidden files like `.env`. **Goal:** move around the to-do app project with relative and absolute paths, and find its hidden config file.",
+      "outcomes": [
+        "What the **working directory** is (`pwd`).",
+        "**Absolute** paths vs **relative** paths.",
+        "The special names `.`, `..`, `~` and `-`.",
+        "**Hidden files** and `ls -a`."
+      ],
+      "task": [
+        "Go into `todo-app/backend` with a **relative** path. Print where you are with `pwd`.",
+        "List the files with `ls`. Then list again with `ls -a`. Which file appears only with `-a`?",
+        "Go up one level with `cd ..`. Then go into `frontend/public` and print `pwd`.",
+        "Go back to the previous folder with `cd -`.",
+        "Use an **absolute** path (starts with `/` or `~`) to go to the backend `logs` folder. Print `pwd` and list it."
+      ],
+      "hints": [
+        "A relative path starts from the folder the user is in now. An absolute path starts from `/` (the root directory).",
+        "Hidden files start with a dot, like `.env`. `ls -a` shows them. `cd -` jumps back to the last folder.",
+        "`cd todo-app/backend` then `pwd`, `ls`, `ls -a`, `cd ..`, `cd frontend/public`, `cd -`, `cd ~/bash-practice/day01/todo-app/backend/logs`."
+      ],
+      "learn": [
+        {
+          "title": "One tree of folders",
+          "text": [
+            "Linux has one tree of folders. The top is `/`, the **root directory**. The terminal always stands in one folder: the **working directory**.",
+            "`pwd` prints it. `cd` moves to another folder. `ls` lists what is inside."
+          ],
+          "art": [
+            "/",
+            "└── home",
+            "    └── wicky                 <- home folder (~)",
+            "        └── bash-practice/day01",
+            "            └── todo-app",
+            "                ├── backend",
+            "                │   ├── .env       <- hidden file",
+            "                │   └── logs",
+            "                └── frontend",
+            "                    └── public"
+          ]
+        },
+        {
+          "title": "Absolute or relative path",
+          "text": [
+            "An **absolute** path starts with `/` (or `~`), so it works from any folder. A **relative** path starts from the current folder."
+          ],
+          "table": {
+            "head": [
+              "Path",
+              "Kind",
+              "Starts at"
+            ],
+            "rows": [
+              [
+                "`/home/wicky/bash-practice/day01`",
+                "absolute",
+                "the top `/`"
+              ],
+              [
+                "`~/bash-practice/day01`",
+                "absolute",
+                "the home folder"
+              ],
+              [
+                "`todo-app/backend`",
+                "relative",
+                "the current folder"
+              ],
+              [
+                "`..` / `.` / `-`",
+                "special",
+                "parent folder / this folder / previous folder (`cd -`)"
+              ]
+            ]
+          }
+        },
+        {
+          "title": "Hidden files, and / vs \\",
+          "text": [
+            "A file whose name starts with a dot (`.env`, `.gitignore`) is **hidden**. `ls` skips it; `ls -a` shows it.",
+            "Linux paths use `/`. In bash, `\\` is an escape character, so a Windows path breaks:"
+          ],
+          "art": "cd todo-app\\backend   ->  bash sees: cd todo-appbackend   ->  No such file or directory"
+        }
+      ],
+      "steps": [
+        {
+          "say": "Go into `todo-app/backend` with a **relative** path (no `/` at the start), then print where we are.",
+          "code": [
+            "cd todo-app/backend",
+            "pwd"
+          ],
+          "after": "`pwd` always prints an absolute path.",
+          "out": "/home/wicky/bash-practice/day01/todo-app/backend"
+        },
+        {
+          "say": "List the folder with plain `ls`.",
+          "code": "ls",
+          "after": "`.env` is there, but `ls` hides it.",
+          "out": "logs  src"
+        },
+        {
+          "say": "List **all** files with `ls -a`.",
+          "code": "ls -a",
+          "after": "Now we see `.env`, plus `.` (this folder) and `..` (the parent).",
+          "out": ".  ..  .env  logs  src"
+        },
+        {
+          "say": "Go up one level with `..`.",
+          "code": [
+            "cd ..",
+            "pwd"
+          ],
+          "out": "/home/wicky/bash-practice/day01/todo-app"
+        },
+        {
+          "say": "Go down into `frontend/public` (relative to `todo-app`).",
+          "code": [
+            "cd frontend/public",
+            "pwd"
+          ],
+          "out": "/home/wicky/bash-practice/day01/todo-app/frontend/public"
+        },
+        {
+          "say": "`cd -` jumps back to the previous folder and prints its name.",
+          "code": "cd -",
+          "out": "/home/wicky/bash-practice/day01/todo-app"
+        },
+        {
+          "say": "Use an **absolute** path. It works from anywhere.",
+          "code": [
+            "cd ~/bash-practice/day01/todo-app/backend/logs",
+            "pwd",
+            "ls"
+          ],
+          "out": "/home/wicky/bash-practice/day01/todo-app/backend/logs\naccess.log"
+        }
+      ],
+      "explanation": [
+        {
+          "part": "pwd",
+          "meaning": "Print working directory: the full path of the current folder."
+        },
+        {
+          "part": "cd PATH",
+          "meaning": "Change directory: move into another folder."
+        },
+        {
+          "part": "ls / ls -a",
+          "meaning": "List files. `-a` also shows hidden files (names that start with `.`)."
+        },
+        {
+          "part": "cd .. / cd -",
+          "meaning": "Up one level / back to the previous folder."
+        },
+        {
+          "part": "~",
+          "meaning": "Short name for the user's home folder: `/home/wicky`."
+        }
+      ],
+      "expected_output": "/home/wicky/bash-practice/day01/todo-app/backend\nlogs  src\n.  ..  .env  logs  src\n/home/wicky/bash-practice/day01/todo-app\n/home/wicky/bash-practice/day01/todo-app/frontend/public\n/home/wicky/bash-practice/day01/todo-app\n/home/wicky/bash-practice/day01/todo-app/backend/logs\naccess.log",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using a Windows backslash: `cd todo-app\\backend` gives `bash: cd: todo-appbackend: No such file or directory`. Linux paths use `/` (forward slash). The `\\` is an escape character in bash, so it disappears.",
+        "Forgetting that `ls` hides dot files. The user thinks `.env` is missing, but it is only hidden.",
+        "Typing `cd/home` (no space) gives `bash: cd/home: No such file or directory`."
+      ],
+      "checks": [
+        {
+          "run": "cd todo-app\\backend",
+          "expect": "bash: cd: todo-appbackend: No such file or directory"
+        },
+        {
+          "run": "cd/home",
+          "expect": "bash: cd/home: No such file or directory"
+        }
+      ],
+      "interview_say": "An absolute path starts from the root directory `/`, so it works from anywhere. A relative path starts from the current folder. Files whose names start with a dot are hidden; `ls -a` shows them.",
+      "try_yourself": "Run `cd` with nothing after it, then `pwd`. Where are you? Then try `cd ~-` and see what happens."
+    },
+    {
+      "id": "d01p02",
+      "title": "The Linux folder map: where configs, logs and programs live",
+      "type": "concept",
+      "topic": "Files",
+      "minutes": 10,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "Interviewers often ask: \"Nginx is broken. Where is its config? Where is its log?\" Every Linux server uses the same main folders, so one map works everywhere. **Goal:** check the main folders under `/` and learn what each one is for.",
+      "outcomes": [
+        "What `/etc`, `/var/log`, `/home`, `/tmp`, `/usr/bin`, `/opt` and `/proc` are for.",
+        "The root directory `/` vs the root user's home `/root`.",
+        "How to find where a command lives."
+      ],
+      "task": [
+        "Run `ls /` and look at the top folders. (Your list can be a little different from another machine.)",
+        "Run `stat -c '%n -> %F' /etc /var/log /home /tmp /usr/bin /opt /proc` to check that each one is a directory.",
+        "Find where the `ls` program lives with `command -v ls`.",
+        "Show the owner of `/` (root directory) and of `/root` (home of the root user) with `stat -c '%n owner=%U' / /root`.",
+        "Read the first line of `/proc/self/status`. (`/proc` shows live information about running processes.)"
+      ],
+      "hints": [
+        "Configs live in one folder, logs in another, programs in another. Think: e = etc = settings.",
+        "`stat -c` prints only the fields the user asks for. `%n` = name, `%F` = file type, `%U` = owner.",
+        "`head -n 1 /proc/self/status` shows the name of the process that reads the file."
+      ],
+      "learn": [
+        {
+          "title": "The map",
+          "text": [
+            "Learn this map. It is the same on every server."
+          ],
+          "art": [
+            "/               root directory (the top)",
+            "├── etc         SETTINGS      /etc/nginx/nginx.conf",
+            "├── var/log     LOGS          /var/log/syslog",
+            "├── home        user homes    /home/wicky",
+            "├── root        home of the root user (admin)",
+            "├── tmp         temporary, can be deleted at restart",
+            "├── usr/bin     PROGRAMS      /usr/bin/ls",
+            "├── opt         extra software (/opt/jenkins)",
+            "└── proc        LIVE kernel info, not on disk"
+          ],
+          "after": "Memory trick: **etc** = settings, **var** = varies (logs grow), **bin** = binaries (programs)."
+        },
+        {
+          "title": "Two kinds of \"root\"",
+          "text": [
+            "`/` is the **root directory**, the top of the tree. `root` is the **admin user**; its home folder is `/root`. They are different things."
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "say": "Look at the top folders. The list is a little different on each machine, so no output is shown.",
+          "code": "ls /",
+          "run": false
+        },
+        {
+          "say": "Check that each main folder is a directory (`%n` = name, `%F` = type).",
+          "code": "stat -c '%n -> %F' /etc /var/log /home /tmp /usr/bin /opt /proc",
+          "out": "/etc -> directory\n/var/log -> directory\n/home -> directory\n/tmp -> directory\n/usr/bin -> directory\n/opt -> directory\n/proc -> directory"
+        },
+        {
+          "say": "Ask bash where the `ls` program lives.",
+          "code": "command -v ls",
+          "after": "A command is just a program file in a folder like `/usr/bin`.",
+          "out": "/usr/bin/ls"
+        },
+        {
+          "say": "Compare the root directory `/` and the root user's home `/root`.",
+          "code": "stat -c '%n owner=%U' / /root",
+          "after": "Both belong to the user `root`, but they are two different folders.",
+          "out": "/ owner=root\n/root owner=root"
+        },
+        {
+          "say": "Read a live file from `/proc`. The kernel makes it at the moment it is read.",
+          "code": "head -n 1 /proc/self/status",
+          "after": "`self` is the process that reads it, so the name is `head`.",
+          "out": "Name:\thead"
+        }
+      ],
+      "explanation": [
+        {
+          "part": "/etc",
+          "meaning": "Configuration files. Example: `/etc/nginx/nginx.conf`, `/etc/hosts`."
+        },
+        {
+          "part": "/var/log",
+          "meaning": "Log files. Example: `/var/log/nginx/error.log`, `/var/log/syslog`."
+        },
+        {
+          "part": "/home",
+          "meaning": "Home folders of normal users. Example: `/home/wicky`."
+        },
+        {
+          "part": "/tmp",
+          "meaning": "Temporary files. Often cleaned when the machine restarts."
+        },
+        {
+          "part": "/usr/bin",
+          "meaning": "Programs (commands) installed by the system, like `ls` and `grep`."
+        },
+        {
+          "part": "/opt",
+          "meaning": "Optional or third-party software, for example a Jenkins or a vendor tool."
+        },
+        {
+          "part": "/proc",
+          "meaning": "Not real files on disk. Live information from the kernel about processes, CPU and memory."
+        },
+        {
+          "part": "/ vs /root",
+          "meaning": "`/` is the root directory (top of all folders). `/root` is the home folder of the root user. Two different things."
+        }
+      ],
+      "expected_output": "/etc -> directory\n/var/log -> directory\n/home -> directory\n/tmp -> directory\n/usr/bin -> directory\n/opt -> directory\n/proc -> directory\n/usr/bin/ls\n/ owner=root\n/root owner=root\nName:\thead",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Mixing up `/` (root directory) and `root` (the admin user). The root user's home is `/root`, not `/`.",
+        "Looking for logs in `/etc`. Configs are in `/etc`; logs are in `/var/log`.",
+        "Thinking `/tmp` is safe storage. Files there can disappear after a restart."
+      ],
+      "interview_say": "Configs are in `/etc`, logs in `/var/log`, user homes in `/home`, temporary files in `/tmp`, programs in `/usr/bin`, and `/proc` shows live process information from the kernel.",
+      "try_yourself": "Run `ls /proc | head` and `cat /proc/loadavg`. What do you think the numbers in `loadavg` mean? (Day 17 explains them.)"
+    },
+    {
+      "id": "d01p03",
+      "title": "Write a script: prepare a release folder",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A deploy repeats the same folder steps every time. Typing them by hand is slow and easy to get wrong, so DevOps teams put them in a script. **Goal:** write your first bash script, `prepare-release.sh`. It prepares the folders for release v1.2 and deletes the old release v1.0.",
+      "outcomes": [
+        "How to write, check and run a bash script.",
+        "The DevOps script standard: shebang, comments, `set -euo pipefail`, quoted variables.",
+        "`mkdir -p` with braces, `touch`, `cp -r`, `mv` and `rm -r`.",
+        "How `set -e` stops a script at the first error."
+      ],
+      "spec": [
+        "Start with the shebang `#!/bin/bash` and the safety line `set -euo pipefail`.",
+        "Keep the release folders in two variables: `NEW=\"releases/v1.2\"` and `OLD=\"releases/v1.0\"`.",
+        "Make `$NEW/frontend/logs` and `$NEW/backend/logs` with one `mkdir -p`.",
+        "Make an empty file `$NEW/backend/logs/app.log`.",
+        "Copy both `config` folders from the old release into the new one.",
+        "Rename `app.yml` to `app-prod.yml` in the new backend config.",
+        "Delete the old release, then print the folder tree."
+      ],
+      "task": [
+        "In `day01`, open a new file with `nano prepare-release.sh` and write the script from the list above.",
+        "Check it with `bash -n prepare-release.sh` and `shellcheck prepare-release.sh`.",
+        "Make it executable with `chmod +x`, then run it with `./prepare-release.sh`.",
+        "Run it a second time. What happens, and why?"
+      ],
+      "hints": [
+        "Start with `#!/bin/bash`, then `set -euo pipefail`, then the two variables. No spaces around `=`.",
+        "Write `\"$NEW\"/{frontend,backend}/logs`: the braces stay outside the quotes. Folders need `cp -r`.",
+        "The commands, in order: `mkdir -p`, `touch`, `cp -r` (two times), `mv`, `rm -r`, `tree releases`."
+      ],
+      "learn": [
+        {
+          "title": "A script is a file of commands",
+          "text": [
+            "Bash reads the file from top to bottom and runs each line. Lines that start with `#` are comments; bash ignores them.",
+            "Two ways to run it: `bash prepare-release.sh`, or make it executable once (`chmod +x`) and run `./prepare-release.sh`. The `./` means \"the file in this folder\"."
+          ]
+        },
+        {
+          "title": "The DevOps script standard",
+          "text": [
+            "Start every script like this. Interviewers look for it."
+          ],
+          "table": {
+            "head": [
+              "Line",
+              "Why"
+            ],
+            "rows": [
+              [
+                "`#!/bin/bash`",
+                "The **shebang**: Linux runs the file with bash."
+              ],
+              [
+                "`# what this script does`",
+                "Comments at the top: what it does and how to run it."
+              ],
+              [
+                "`set -euo pipefail`",
+                "Stop at the first error (`-e`), at an unset variable (`-u`), and when any part of a pipe fails."
+              ],
+              [
+                "`NEW=\"releases/v1.2\"`",
+                "A **variable**: a name for a value. No spaces around `=`."
+              ],
+              [
+                "`\"$NEW\"`",
+                "Use it with `$` and **double quotes**, so a space in a name cannot break the command."
+              ]
+            ]
+          },
+          "after": "Before running: `bash -n file.sh` checks the syntax, and `shellcheck file.sh` finds common bugs."
+        },
+        {
+          "title": "The file commands in this script",
+          "table": {
+            "head": [
+              "Command",
+              "What it does"
+            ],
+            "rows": [
+              [
+                "`mkdir -p a/{x,y}/logs`",
+                "Makes `a/x/logs` and `a/y/logs`, with all missing parents. No error if they exist."
+              ],
+              [
+                "`touch app.log`",
+                "Makes an empty file."
+              ],
+              [
+                "`cp -r SRC DEST/`",
+                "Copies a folder and everything inside it into `DEST`."
+              ],
+              [
+                "`mv OLD NEW`",
+                "Moves or renames."
+              ],
+              [
+                "`rm -r DIR`",
+                "Deletes a folder and everything inside. No recycle bin."
+              ]
+            ]
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "prepare-release.sh",
+          "say": "The finished script. The comments say what each part does and why.",
+          "content": [
+            "#!/bin/bash",
+            "# prepare-release.sh",
+            "#",
+            "# What this script does:",
+            "#   1. Makes the log folders for the new release (frontend and backend).",
+            "#   2. Makes an empty backend log file.",
+            "#   3. Copies the config folders from the old release into the new one.",
+            "#   4. Renames the backend config to app-prod.yml.",
+            "#   5. Deletes the old release.",
+            "#   6. Shows the new folder tree.",
+            "#",
+            "# How to run it (from ~/bash-practice/day01):",
+            "#   chmod +x prepare-release.sh    (only once)",
+            "#   ./prepare-release.sh",
+            "",
+            "# Safety: stop at the first error (-e), stop when a variable is not set (-u),",
+            "# and let a pipe (cmd1 | cmd2) fail if any part of it fails (-o pipefail).",
+            "set -euo pipefail",
+            "",
+            "# The two release folders. For the next release, change only these two lines.",
+            "# No spaces around = in bash.",
+            "NEW=\"releases/v1.2\"",
+            "OLD=\"releases/v1.0\"",
+            "",
+            "# Use variables as \"$NAME\": the $ reads the value, the double quotes keep it in one piece.",
+            "echo \"Preparing $NEW from $OLD\"",
+            "",
+            "# 1. Log folders. -p makes missing parent folders, and gives no error if they exist.",
+            "#    The braces make two paths: $NEW/frontend/logs and $NEW/backend/logs.",
+            "#    The braces must stay OUTSIDE the quotes, or bash does not expand them.",
+            "mkdir -p \"$NEW\"/{frontend,backend}/logs",
+            "",
+            "# 2. An empty log file for the backend.",
+            "touch \"$NEW/backend/logs/app.log\"",
+            "",
+            "# 3. Copy the config folders. They are folders, so cp needs -r (recursive).",
+            "#    The / at the end means \"copy INTO this folder\".",
+            "cp -r \"$OLD/frontend/config\" \"$NEW/frontend/\"",
+            "cp -r \"$OLD/backend/config\" \"$NEW/backend/\"",
+            "",
+            "# 4. Rename: mv in the same folder with a new name.",
+            "mv \"$NEW/backend/config/app.yml\" \"$NEW/backend/config/app-prod.yml\"",
+            "",
+            "# 5. Delete the old release. No -f, so rm still reports a problem.",
+            "rm -r \"$OLD\"",
+            "",
+            "# 6. Show the result.",
+            "echo \"Done. The new release:\"",
+            "tree releases"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "say": "Open a new file in the editor and type the script. Save with **Ctrl+O**, **Enter**, and close with **Ctrl+X**.",
+          "code": "nano prepare-release.sh",
+          "run": false,
+          "edit": "prepare-release.sh"
+        },
+        {
+          "say": "Check the syntax without running anything. No output means no syntax error.",
+          "code": "bash -n prepare-release.sh",
+          "out": ""
+        },
+        {
+          "say": "Let ShellCheck look for common bugs (install it once: `sudo apt install -y shellcheck`). No output means it found nothing.",
+          "code": "shellcheck prepare-release.sh",
+          "out": ""
+        },
+        {
+          "say": "Make the file executable, then run it with `./`.",
+          "code": [
+            "chmod +x prepare-release.sh",
+            "./prepare-release.sh"
+          ],
+          "after": "The tree shows both `logs` folders, the empty `app.log`, both configs and the renamed `app-prod.yml`. `v1.0` is gone.",
+          "out": "Preparing releases/v1.2 from releases/v1.0\nDone. The new release:\nreleases\n└── v1.2\n    ├── backend\n    │   ├── config\n    │   │   └── app-prod.yml\n    │   └── logs\n    │       └── app.log\n    └── frontend\n        ├── config\n        │   └── nginx.conf\n        └── logs\n\n8 directories, 3 files"
+        },
+        {
+          "say": "Run it again. `v1.0` does not exist any more, so a `cp` fails. `set -e` stops the script right there. `||` runs the `echo` only when the script fails, and `$?` is its exit code.",
+          "code": "./prepare-release.sh || echo \"The script stopped. Exit code: $?\"",
+          "after": "The script stopped at the first error and did not print \"Done\". Without `set -e` it would go on and print \"Done\" anyway (see problem 5).",
+          "out": "Preparing releases/v1.2 from releases/v1.0\ncp: cannot stat 'releases/v1.0/frontend/config': No such file or directory\nThe script stopped. Exit code: 1"
+        }
+      ],
+      "explanation": [
+        {
+          "part": "#!/bin/bash",
+          "meaning": "Shebang: run this file with bash."
+        },
+        {
+          "part": "set -euo pipefail",
+          "meaning": "Stop at the first error, at an unset variable, and when a pipe fails."
+        },
+        {
+          "part": "NEW=\"releases/v1.2\"",
+          "meaning": "Make a variable. Read it with `\"$NEW\"`."
+        },
+        {
+          "part": "\"$NEW\"/{frontend,backend}/logs",
+          "meaning": "Quoted variable + brace expansion = two paths."
+        },
+        {
+          "part": "bash -n / shellcheck",
+          "meaning": "Check a script before running it."
+        },
+        {
+          "part": "chmod +x + ./script.sh",
+          "meaning": "Make the file executable, then run it from this folder."
+        }
+      ],
+      "expected_output": "Preparing releases/v1.2 from releases/v1.0\nDone. The new release:\nreleases\n└── v1.2\n    ├── backend\n    │   ├── config\n    │   │   └── app-prod.yml\n    │   └── logs\n    │       └── app.log\n    └── frontend\n        ├── config\n        │   └── nginx.conf\n        └── logs\n\n8 directories, 3 files\nPreparing releases/v1.2 from releases/v1.0\ncp: cannot stat 'releases/v1.0/frontend/config': No such file or directory\nThe script stopped. Exit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Spaces around `=`: `NEW = \"releases/v1.2\"` gives `bash: NEW: command not found`. Bash thinks `NEW` is a command.",
+        "Running it before `chmod +x` gives `bash: ./prepare-release.sh: Permission denied`. Use `chmod +x` once, or run `bash prepare-release.sh`.",
+        "Braces inside the quotes: `mkdir -p \"$NEW/{frontend,backend}/logs\"` makes one folder really called `{frontend,backend}`."
+      ],
+      "checks": [
+        {
+          "run": "NEW = \"releases/v1.2\"",
+          "expect": "bash: NEW: command not found"
+        },
+        {
+          "run": "printf '#!/bin/bash\\necho hi\\n' > prepare-release.sh; ./prepare-release.sh",
+          "expect": "bash: ./prepare-release.sh: Permission denied"
+        },
+        {
+          "run": "NEW=releases/v1.2; mkdir -p \"$NEW/{frontend,backend}/logs\"; ls releases/v1.2",
+          "expect": "{frontend,backend}"
+        }
+      ],
+      "interview_say": "I put repeated steps in a script that starts with `#!/bin/bash` and `set -euo pipefail`, keep names in quoted variables, and check it with `bash -n` and `shellcheck` before I run it.",
+      "try_yourself": "Change the variables to `NEW=\"releases/v1.3\"` and `OLD=\"releases/v1.2\"` and run the script. Which line fails, and why?"
+    },
+    {
+      "id": "d01p04",
+      "title": "Symlinks and hard links: the `current` release pointer",
+      "type": "command",
+      "topic": "Files",
+      "minutes": 14,
+      "optional": false,
+      "core": true,
+      "workdir": "links",
+      "situation": "Deploy tools keep each version in its own folder and use a link called `current` for the live version. Nginx uses links too (`sites-enabled`). **Goal:** make symlinks and hard links, see what happens when the original file is deleted, and switch `current` like a real deploy.",
+      "outcomes": [
+        "How Linux stores a file: **name** -> **inode** -> **data**.",
+        "A **hard link** (second name) vs a **symlink** (a stored path).",
+        "Which link survives when the original is deleted.",
+        "How `ln -sfn` switches a release in one step."
+      ],
+      "task": [
+        "In `links`, create a symlink called `current` that points to `releases/v1.2`.",
+        "Read a file through it: `cat current/app.conf`. Show where it points with `readlink current`.",
+        "Create a hard link `db-hard.conf` and a symlink `db-soft.conf`, both to `shared/db.conf`.",
+        "Show the link count with `stat -c '%n links=%h' shared/db.conf db-hard.conf`.",
+        "Delete `shared/db.conf`. Now `cat` both links. Which one still works?",
+        "Switch `current` to `releases/v1.1` with `ln -sfn`. Check with `cat current/app.conf`."
+      ],
+      "hints": [
+        "`ln` makes a hard link. `ln -s` makes a symbolic link (symlink). The order is `ln -s TARGET LINK_NAME`.",
+        "A hard link is a second name for the same data. A symlink only stores a path to the target.",
+        "`ln -s releases/v1.2 current`, `ln shared/db.conf db-hard.conf`, `ln -s shared/db.conf db-soft.conf`, then `rm shared/db.conf`."
+      ],
+      "learn": [
+        {
+          "title": "Name -> inode -> data",
+          "text": [
+            "A folder stores **names**. Each name points to an **inode**: a record with the owner, size, permissions and where the **data** is. The inode counts how many names point to it (the **link count**). The data is deleted only when that count is 0."
+          ]
+        },
+        {
+          "title": "Hard link vs symlink",
+          "art": [
+            "HARD LINK  (ln shared/db.conf db-hard.conf)",
+            "shared/db.conf ──┐",
+            "                 ├──► inode 1234 (links = 2) ──► db=todo",
+            "db-hard.conf ────┘",
+            "",
+            "SYMLINK  (ln -s shared/db.conf db-soft.conf)",
+            "db-soft.conf: a tiny file with the text \"shared/db.conf\"",
+            "      └── Linux follows the path ──► shared/db.conf ──► inode 1234",
+            "",
+            "after rm shared/db.conf:",
+            "db-hard.conf ──► inode 1234 (links = 1) ──► db=todo     still works",
+            "db-soft.conf ──► \"shared/db.conf\" ──► nothing          broken"
+          ],
+          "table": {
+            "head": [
+              "",
+              "Hard link (`ln`)",
+              "Symlink (`ln -s`)"
+            ],
+            "rows": [
+              [
+                "Original deleted",
+                "still works",
+                "broken"
+              ],
+              [
+                "Can point to a folder",
+                "no",
+                "yes"
+              ],
+              [
+                "Can point to another disk",
+                "no",
+                "yes"
+              ]
+            ]
+          }
+        },
+        {
+          "title": "The `current` pointer",
+          "text": [
+            "The web server always uses `current`. A deploy or a rollback only changes the link, in one step: `ln -sfn TARGET current` (`-s` symlink, `-f` replace, `-n` do not go inside the old link)."
+          ],
+          "art": [
+            "releases/v1.1   releases/v1.2",
+            "      ▲               ▲",
+            "      │   rollback    │   deploy",
+            "      └──── current ──┘"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "say": "Make the symlink `current` -> `releases/v1.2`. Target first, then the new name.",
+          "code": "ln -s releases/v1.2 current",
+          "out": ""
+        },
+        {
+          "say": "`stat -c %N` shows the link with an arrow, like `ls -l` does.",
+          "code": "stat -c '%N' current",
+          "out": "'current' -> 'releases/v1.2'"
+        },
+        {
+          "say": "Use the link like a folder. `readlink` prints only the stored path.",
+          "code": [
+            "cat current/app.conf",
+            "readlink current"
+          ],
+          "out": "version=1.2\nreleases/v1.2"
+        },
+        {
+          "say": "Make a **hard** link (no `-s`) and a **symlink** (with `-s`) to `shared/db.conf`.",
+          "code": [
+            "ln shared/db.conf db-hard.conf",
+            "ln -s shared/db.conf db-soft.conf"
+          ],
+          "out": ""
+        },
+        {
+          "say": "Ask for the file type of each name.",
+          "code": "stat -c '%n is a %F' shared/db.conf db-hard.conf db-soft.conf",
+          "after": "The hard link is a normal file name. The symlink is a different type.",
+          "out": "shared/db.conf is a regular file\ndb-hard.conf is a regular file\ndb-soft.conf is a symbolic link"
+        },
+        {
+          "say": "Show the link count (`%h`).",
+          "code": "stat -c '%n links=%h' shared/db.conf db-hard.conf",
+          "after": "Both say 2: two names, one inode.",
+          "out": "shared/db.conf links=2\ndb-hard.conf links=2"
+        },
+        {
+          "say": "Optional: `ls -li` shows the inode number first. Both names have the same number (the number differs on each machine).",
+          "code": "ls -li shared/db.conf db-hard.conf",
+          "run": false
+        },
+        {
+          "say": "Delete the \"original\" name.",
+          "code": "rm shared/db.conf",
+          "out": ""
+        },
+        {
+          "say": "Read both links. `||` runs the `echo` only if `cat` fails.",
+          "code": [
+            "cat db-hard.conf",
+            "cat db-soft.conf || echo \"db-soft.conf is a broken symlink\""
+          ],
+          "after": "The hard link still has the data. The symlink's path leads to nothing.",
+          "out": "db=todo\ncat: db-soft.conf: No such file or directory\ndb-soft.conf is a broken symlink"
+        },
+        {
+          "say": "Roll back: point `current` to `v1.1` in one step.",
+          "code": [
+            "ln -sfn releases/v1.1 current",
+            "stat -c '%N' current",
+            "cat current/app.conf"
+          ],
+          "out": "'current' -> 'releases/v1.1'\nversion=1.1"
+        }
+      ],
+      "explanation": [
+        {
+          "part": "ln -s TARGET NAME",
+          "meaning": "Create a symlink called NAME that points to TARGET."
+        },
+        {
+          "part": "readlink current",
+          "meaning": "Print the path stored in the symlink."
+        },
+        {
+          "part": "ln TARGET NAME",
+          "meaning": "Create a hard link: a second name for the same inode."
+        },
+        {
+          "part": "%h",
+          "meaning": "Number of hard links (names) the inode has."
+        },
+        {
+          "part": "ln -sfn",
+          "meaning": "Replace an existing symlink in one step. Common in deploy scripts."
+        }
+      ],
+      "expected_output": "'current' -> 'releases/v1.2'\nversion=1.2\nreleases/v1.2\nshared/db.conf is a regular file\ndb-hard.conf is a regular file\ndb-soft.conf is a symbolic link\nshared/db.conf links=2\ndb-hard.conf links=2\ndb=todo\ncat: db-soft.conf: No such file or directory\ndb-soft.conf is a broken symlink\n'current' -> 'releases/v1.1'\nversion=1.1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Wrong order: `ln -s current releases/v1.2` creates the link inside the target folder. The rule is `ln -s TARGET LINK`.",
+        "Running `ln -s releases/v1.1 current` when `current` already points to a folder gives no error, but it does not switch the link. It creates a new link inside the folder: `releases/v1.2/v1.1`. Use `ln -sfn`.",
+        "Hard link to a folder: `ln releases cur` gives `ln: releases: hard link not allowed for directory`."
+      ],
+      "checks": [
+        {
+          "run": "ln -s releases/v1.2 current; ln -s releases/v1.1 current; ls releases/v1.2",
+          "expect": "v1.1"
+        },
+        {
+          "run": "ln releases cur",
+          "expect": "ln: releases: hard link not allowed for directory"
+        }
+      ],
+      "interview_say": "A hard link is another name for the same inode, so it still works if the original name is deleted. A symlink stores a path, so it breaks when the target is removed, but it can point to folders and other disks. Deploy tools switch a `current` symlink with `ln -sfn`.",
+      "try_yourself": "Make a symlink with an absolute target: `ln -s ~/bash-practice/day01/links/releases/v1.2 abs-link`. Then `mv` both `abs-link` and `current` into another folder. Which one still works? Why?"
+    },
+    {
+      "id": "d01p05",
+      "title": "Find the bug: the log backup script",
+      "type": "fix-bug",
+      "topic": "Files",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": "wild",
+      "situation": "A teammate who usually works on Windows wrote `backup-logs.sh`. It prints \"Backup done\", but the backup folder is empty. **Goal:** read the error messages, find the 3 bugs, and fix the script.",
+      "outcomes": [
+        "How to read a bash error message, and why the **first** error matters most.",
+        "Three common bugs: `mkdir` without `-p`, a Windows `\\` in a path, `cp` of a folder.",
+        "How the glob `[1-5]` picks files."
+      ],
+      "spec": [
+        "Make the folder `backup/2026-10` (and `backup`, if it is missing).",
+        "Copy only the logs from 1 to 5 October (`logs/app-2026-10-01.log` to `-05.log`) into it.",
+        "Copy every `.conf` file from `configs` into it.",
+        "Print `Backup done` at the end.",
+        "When fixed, `backup/2026-10` has 7 files: 5 logs and 2 `.conf` files."
+      ],
+      "task": [
+        "In `wild`, read the script with `cat backup-logs.sh`.",
+        "Run it: `bash backup-logs.sh`. Read every error line.",
+        "Find and fix 3 bugs (with `nano backup-logs.sh`).",
+        "Run it again and list `backup/2026-10`. You should see 5 logs and 2 conf files."
+      ],
+      "hints": [
+        "Each error line points to one bug. Read them from the top.",
+        "Look at the folder separator, the missing parent folder, and copying a whole folder instead of files.",
+        "Use `mkdir -p`, change `\\` to `/`, and use `configs/*.conf` instead of `configs`."
+      ],
+      "learn": [
+        {
+          "title": "Bash goes on after an error",
+          "text": [
+            "Without `set -e`, a failed line prints an error and bash runs the next line. So the last line prints \"Backup done\" even when nothing was copied. Always check the result."
+          ]
+        },
+        {
+          "title": "How to read an error",
+          "art": [
+            "mkdir: cannot create directory ‘backup/2026-10’: No such file or directory",
+            "└─┬─┘  └──────────────┬─────────────────────┘   └────────────┬──────────┘",
+            "program      what it tried                         why it failed"
+          ],
+          "after": "Fix the **first** error first. Later errors are often caused by it."
+        },
+        {
+          "title": "The three bug types",
+          "table": {
+            "head": [
+              "Bug",
+              "Why it breaks",
+              "Fix"
+            ],
+            "rows": [
+              [
+                "`mkdir backup/2026-10`",
+                "`backup` does not exist yet",
+                "`mkdir -p`"
+              ],
+              [
+                "`logs\\app-...`",
+                "`\\` escapes the next letter and disappears: `logsapp-...`",
+                "use `/`"
+              ],
+              [
+                "`cp configs DEST`",
+                "`configs` is a folder; `cp` needs `-r`",
+                "`configs/*.conf` (the files)"
+              ]
+            ]
+          },
+          "after": "`0[1-5]` matches `01` to `05`: `[1-5]` is **one** character from 1 to 5."
+        }
+      ],
+      "files": [
+        {
+          "name": "backup-logs.sh",
+          "say": "The whole fixed file. Each part has a comment that says what it does and why.",
+          "content": [
+            "#!/bin/bash",
+            "# backup-logs.sh",
+            "#",
+            "# What this script does:",
+            "#   1. Makes the folder backup/2026-10 (and the folder backup, if it is missing).",
+            "#   2. Copies the logs from 1 to 5 October into backup/2026-10.",
+            "#   3. Copies every .conf file from the configs folder into backup/2026-10.",
+            "#   4. Prints \"Backup done\" at the end.",
+            "#",
+            "# How to run it:",
+            "#   cd ~/bash-practice/day01/wild",
+            "#   bash backup-logs.sh",
+            "# All paths below are relative (they do not start with /),",
+            "# so the script must be run from inside the wild folder.",
+            "",
+            "# ---- Step 1: make the backup folder ----",
+            "# -p means \"make the parent folders too\".",
+            "# Without -p, mkdir fails, because the folder \"backup\" does not exist yet.",
+            "# With -p there is also no error if the folder already exists,",
+            "# so the script is safe to run again tomorrow.",
+            "mkdir -p backup/2026-10",
+            "",
+            "# ---- Step 2: copy the October logs from day 01 to day 05 ----",
+            "# Linux paths use the forward slash /. (Windows uses the backslash \\.)",
+            "# [1-5] matches ONE character from 1 to 5, so 0[1-5] matches 01 02 03 04 05,",
+            "# but not 06, 07, 08 or 09.",
+            "# The / at the end of backup/2026-10/ means \"copy the files INTO this folder\".",
+            "cp logs/app-2026-10-0[1-5].log backup/2026-10/",
+            "",
+            "# ---- Step 3: copy all .conf files (the files, not the folder) ----",
+            "# Bash changes configs/*.conf into: configs/api.conf configs/web.conf",
+            "# (Copying the folder \"configs\" itself would need cp -r.)",
+            "cp configs/*.conf backup/2026-10/",
+            "",
+            "# ---- Step 4: say that the script reached the end ----",
+            "# Note: bash runs this line even if a command above failed.",
+            "# Problem 3 shows how set -e stops a script at the first error.",
+            "echo \"Backup done\""
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "say": "Read the broken script first. Never run a script you have not read.",
+          "code": "cat backup-logs.sh",
+          "out": "#!/bin/bash\n# Copy October logs 01-05 and all .conf files into backup/2026-10\nmkdir backup/2026-10\ncp logs\\app-2026-10-0[1-5].log backup/2026-10/\ncp configs backup/2026-10/\necho \"Backup done\""
+        },
+        {
+          "say": "Run it and read **every** error line from the top.",
+          "code": "bash backup-logs.sh",
+          "after": "Error 1 (line 3): `backup` does not exist. Error 2 (line 4): the `\\` disappeared, so the path became `logsapp-...`. Error 3 (line 5): `configs` is a folder. Then \"Backup done\" is printed anyway.",
+          "out": "mkdir: cannot create directory ‘backup/2026-10’: No such file or directory\ncp: cannot stat 'logsapp-2026-10-0[1-5].log': No such file or directory\ncp: -r not specified; omitting directory 'configs'\nBackup done"
+        },
+        {
+          "say": "Check the result. Do not trust \"Backup done\".",
+          "code": "ls backup",
+          "out": "ls: cannot access 'backup': No such file or directory"
+        },
+        {
+          "say": "Open the script and fix the 3 lines: `mkdir -p`, `/` instead of `\\`, and `configs/*.conf`. Save with **Ctrl+O**, **Enter**, close with **Ctrl+X**.",
+          "code": "nano backup-logs.sh",
+          "run": false,
+          "edit": "backup-logs.sh"
+        },
+        {
+          "say": "Run the fixed script.",
+          "code": "bash backup-logs.sh",
+          "out": "Backup done"
+        },
+        {
+          "say": "Check the result: 5 logs and 2 conf files.",
+          "code": "ls backup/2026-10",
+          "after": "Days 06 to 09 were not copied, because `[1-5]` does not match them.",
+          "out": "api.conf\t    app-2026-10-02.log\tapp-2026-10-04.log  web.conf\napp-2026-10-01.log  app-2026-10-03.log\tapp-2026-10-05.log"
+        },
+        {
+          "say": "Run it once more. A good script is safe to run again.",
+          "code": "bash backup-logs.sh",
+          "after": "No `File exists` error, thanks to `mkdir -p`.",
+          "out": "Backup done"
+        }
+      ],
+      "explanation": [
+        {
+          "part": "Line 3: `mkdir backup/2026-10`",
+          "meaning": "Bug 1: `backup` did not exist, so plain `mkdir` failed. Fix: `mkdir -p backup/2026-10` makes both levels."
+        },
+        {
+          "part": "Line 4: `logs\\app-...`",
+          "meaning": "Bug 2: the Windows backslash. In bash `\\` escapes the next letter and disappears, so the path became `logsapp-...`. Fix: use `/`."
+        },
+        {
+          "part": "Line 5: `cp configs ...`",
+          "meaning": "Bug 3: it copied the folder, not the files, and `cp` needs `-r` for a folder. Fix: `configs/*.conf` copies the files inside."
+        }
+      ],
+      "expected_output": "#!/bin/bash\n# Copy October logs 01-05 and all .conf files into backup/2026-10\nmkdir backup/2026-10\ncp logs\\app-2026-10-0[1-5].log backup/2026-10/\ncp configs backup/2026-10/\necho \"Backup done\"\nmkdir: cannot create directory ‘backup/2026-10’: No such file or directory\ncp: cannot stat 'logsapp-2026-10-0[1-5].log': No such file or directory\ncp: -r not specified; omitting directory 'configs'\nBackup done\nls: cannot access 'backup': No such file or directory\nBackup done\napi.conf\t    app-2026-10-02.log\tapp-2026-10-04.log  web.conf\napp-2026-10-01.log  app-2026-10-03.log\tapp-2026-10-05.log\nBackup done",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Only fixing the last error. Always fix from the first error down; later errors are often caused by the first one.",
+        "Writing `cp configs/ backup/` and getting `cp: -r not specified; omitting directory 'configs/'`.",
+        "Thinking \"Backup done\" means success. The script has no error checks, so it prints it anyway (`set -e` fixes this, see problem 3)."
+      ],
+      "checks": [
+        {
+          "run": "mkdir -p backup; cp configs/ backup/",
+          "expect": "cp: -r not specified; omitting directory 'configs/'"
+        }
+      ],
+      "interview_say": "I read the first error first. Here the script used Windows backslashes, a `mkdir` without `-p`, and copied a folder without `-r`. I fixed the paths, used a glob for the files, and checked the result with `ls` instead of trusting the success message.",
+      "try_yourself": "Add `set -euo pipefail` as line 2 of the **broken** script and run it. How many error lines do you see now, and why?"
+    },
+    {
+      "id": "d01p06",
+      "title": "Wildcards: predict which files a pattern matches",
+      "type": "predict",
+      "topic": "Files",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": "match",
+      "situation": "Cleanup scripts delete files with patterns like `*.log`. A wrong pattern deletes the wrong files. **Goal:** guess what each pattern matches, then check, before using patterns with `rm`.",
+      "outcomes": [
+        "`*`, `?` and `[ ]`, and that **bash** expands them before the command runs.",
+        "What happens when nothing matches.",
+        "Why braces `{ }` and quotes behave differently."
+      ],
+      "task": [
+        "In `match`, look at the names with `ls`.",
+        "Before running, write down what each command prints: `echo api-?.log`, `echo api-*.log`, `echo api-[12].log`, `echo *.txt`, `echo *.yml`, `echo config-{dev,prod}.yml`.",
+        "Run them and compare with your guesses."
+      ],
+      "hints": [
+        "`?` = exactly one character. `*` = any text (also empty).",
+        "`[12]` = one character, 1 or 2. If nothing matches, bash leaves the pattern as it is.",
+        "Braces `{}` do not look at files at all. They always expand."
+      ],
+      "learn": [
+        {
+          "title": "Bash expands the pattern first",
+          "art": [
+            "you type:    rm api-*.log",
+            "bash looks at the folder, then runs:",
+            "             rm api-1.log api-10.log api-2.log"
+          ],
+          "after": "So `echo PATTERN` is a safe way to test a pattern before `rm`."
+        },
+        {
+          "title": "The patterns",
+          "table": {
+            "head": [
+              "Pattern",
+              "Matches",
+              "Looks at files?"
+            ],
+            "rows": [
+              [
+                "`*`",
+                "any text, also empty",
+                "yes"
+              ],
+              [
+                "`?`",
+                "exactly one character",
+                "yes"
+              ],
+              [
+                "`[12]` / `[1-5]`",
+                "one character from the list / range",
+                "yes"
+              ],
+              [
+                "`{dev,prod}`",
+                "makes the words, even if no file exists",
+                "no"
+              ],
+              [
+                "`\"*.log\"`",
+                "quotes: no expansion at all",
+                "no"
+              ]
+            ]
+          },
+          "after": "No match? Bash keeps the pattern as plain text: `echo *.yml` prints `*.yml`."
+        }
+      ],
+      "steps": [
+        {
+          "say": "Look at the names first.",
+          "code": "ls",
+          "out": "api-1.log  api-10.log  api-2.log  notes.txt  web-1.log"
+        },
+        {
+          "say": "Guess first: `?` is exactly one character.",
+          "code": "echo api-?.log",
+          "after": "`api-10.log` has two characters after `api-`, so it does not match.",
+          "out": "api-1.log api-2.log"
+        },
+        {
+          "say": "Guess first: `*` is any text.",
+          "code": "echo api-*.log",
+          "out": "api-1.log api-10.log api-2.log"
+        },
+        {
+          "say": "Guess first: `[12]` is one character, 1 or 2.",
+          "code": "echo api-[12].log",
+          "out": "api-1.log api-2.log"
+        },
+        {
+          "say": "Guess first: every name that ends with `.txt`.",
+          "code": "echo *.txt",
+          "out": "notes.txt"
+        },
+        {
+          "say": "Guess first: there is no `.yml` file.",
+          "code": "echo *.yml",
+          "after": "No match, so bash keeps the pattern as text.",
+          "out": "*.yml"
+        },
+        {
+          "say": "Guess first: braces do not look at files.",
+          "code": "echo config-{dev,prod}.yml",
+          "out": "config-dev.yml config-prod.yml"
+        },
+        {
+          "say": "Quotes stop the wildcard.",
+          "code": "echo \"api-*.log\"",
+          "out": "api-*.log"
+        }
+      ],
+      "explanation": [
+        {
+          "part": "?",
+          "meaning": "Matches exactly one character. `api-10.log` has two characters, so it does not match."
+        },
+        {
+          "part": "*",
+          "meaning": "Matches any number of characters."
+        },
+        {
+          "part": "[12]",
+          "meaning": "Matches one character from the list."
+        },
+        {
+          "part": "no match",
+          "meaning": "Bash keeps the pattern as normal text. A script may then try to use a file called `*.yml`."
+        },
+        {
+          "part": "{dev,prod}",
+          "meaning": "Brace expansion makes words. It does not check if files exist."
+        }
+      ],
+      "expected_output": "api-1.log  api-10.log  api-2.log  notes.txt  web-1.log\napi-1.log api-2.log\napi-1.log api-10.log api-2.log\napi-1.log api-2.log\nnotes.txt\n*.yml\nconfig-dev.yml config-prod.yml\napi-*.log",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Quoting the pattern: `echo \"api-*.log\"` prints `api-*.log`. Quotes stop wildcard expansion.",
+        "Expecting `?` to match `10`. It matches only one character."
+      ],
+      "checks": [
+        {
+          "run": "echo \"api-*.log\"",
+          "expect": "api-*.log"
+        }
+      ],
+      "interview_say": "Globs like `*`, `?` and `[ ]` are expanded by the shell to existing file names before the command runs. Braces just generate words. I test a pattern with `echo` or `ls` before I use it with `rm`.",
+      "try_yourself": "Run `shopt -s nullglob` and then `echo *.yml`. What changes? Run `shopt -u nullglob` to turn it off again."
+    },
+    {
+      "id": "d01p07",
+      "title": "Inspect a file before opening it: ls -la, file, stat, zcat",
+      "type": "command",
+      "topic": "Files",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": "inspect",
+      "situation": "Files copied from other servers often have no extension, and some are compressed. **Goal:** read every column of `ls -la`, find the real type of a file with `file`, and read a compressed log without unpacking it.",
+      "outcomes": [
+        "The columns of `ls -la`.",
+        "Why Linux does not need extensions, and how `file` finds the real type.",
+        "`stat -c` for exact details, and `zcat` for `.gz` logs."
+      ],
+      "task": [
+        "In `inspect`, run `ls -la` and read each column.",
+        "Run `file *` to see the real type of each file.",
+        "Show name, size in bytes and permissions with `stat -c '%n %s bytes %A' *`.",
+        "Read the compressed file without unpacking it: `zcat old-logs`."
+      ],
+      "hints": [
+        "Linux does not need extensions. `file` looks inside the file.",
+        "`stat -c` with `%s` gives size in bytes and `%A` gives permissions like `-rwxr-xr-x`.",
+        "`*` does not match hidden files, so `.env` is not in the `file *` output."
+      ],
+      "learn": [
+        {
+          "title": "One line of ls -la",
+          "art": [
+            "-rwxr-xr-x  1  wicky  wicky  24  Oct  1 09:00  deploy",
+            "│└───┬───┘  │  └─┬─┘  └─┬─┘  │   └────┬────┘  └─┬──┘",
+            "│    │      │    │      │    │        │         name",
+            "│    │      │    │      │    │        last change time",
+            "│    │      │    │      │    size in bytes",
+            "│    │      │    │      group",
+            "│    │      │    owner",
+            "│    │      link count (problem 4)",
+            "│    permissions (Day 3)",
+            "type: - file, d folder, l symlink"
+          ]
+        },
+        {
+          "title": "The real type of a file",
+          "text": [
+            "On Linux a name is only a name; `deploy` can be a script with no extension. `file` reads the first bytes and tells the real type. `zcat` prints a gzip file without unpacking it (`zgrep` searches it)."
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "say": "Long list of all files. The dates of `.` and `..` are different on your machine.",
+          "code": "ls -la",
+          "out": "total 24\ndrwxr-xr-x 2 wicky wicky 4096 Oct 20 18:36 .\ndrwxr-xr-x 8 wicky wicky 4096 Oct 20 18:36 ..\n-rw-r--r-- 1 wicky wicky   12 Oct  1 09:00 .env\n-rwxr-xr-x 1 wicky wicky   24 Oct  1 09:00 deploy\n-rw-r--r-- 1 wicky wicky   35 Oct  1 09:00 old-logs\n-rw-r--r-- 1 wicky wicky    6 Oct  1 09:00 readme"
+        },
+        {
+          "say": "Ask `file` for the real type. `*` skips hidden files.",
+          "code": "file *",
+          "after": "`old-logs` has no `.gz` name, but it **is** gzip data.",
+          "out": "deploy:   Bourne-Again shell script, ASCII text executable\nold-logs: gzip compressed data, from Unix, original size modulo 2^32 18\nreadme:   ASCII text"
+        },
+        {
+          "say": "Print name, exact size and permissions.",
+          "code": "stat -c '%n %s bytes %A' *",
+          "out": "deploy 24 bytes -rwxr-xr-x\nold-logs 35 bytes -rw-r--r--\nreadme 6 bytes -rw-r--r--"
+        },
+        {
+          "say": "Read the gzip file without unpacking it on disk.",
+          "code": "zcat old-logs",
+          "out": "line one\nline two"
+        }
+      ],
+      "explanation": [
+        {
+          "part": "ls -la",
+          "meaning": "Long list of all files: permissions, links, owner, group, size, date, name."
+        },
+        {
+          "part": "file *",
+          "meaning": "Guess the type by looking at the content, not the name."
+        },
+        {
+          "part": "stat -c '%n %s bytes %A'",
+          "meaning": "Print name, size in bytes and permission letters."
+        },
+        {
+          "part": "zcat",
+          "meaning": "Print a gzip file without unpacking it on disk."
+        }
+      ],
+      "expected_output": "total 24\ndrwxr-xr-x 2 wicky wicky 4096 Oct 20 18:36 .\ndrwxr-xr-x 8 wicky wicky 4096 Oct 20 18:36 ..\n-rw-r--r-- 1 wicky wicky   12 Oct  1 09:00 .env\n-rwxr-xr-x 1 wicky wicky   24 Oct  1 09:00 deploy\n-rw-r--r-- 1 wicky wicky   35 Oct  1 09:00 old-logs\n-rw-r--r-- 1 wicky wicky    6 Oct  1 09:00 readme\ndeploy:   Bourne-Again shell script, ASCII text executable\nold-logs: gzip compressed data, from Unix, original size modulo 2^32 18\nreadme:   ASCII text\ndeploy 24 bytes -rwxr-xr-x\nold-logs 35 bytes -rw-r--r--\nreadme 6 bytes -rw-r--r--\nline one\nline two",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "Folder dates and the `file` wording can be a little different on the user's machine (it depends on the version of `file`).",
+      "verified": true,
+      "mistakes": [
+        "Running `cat old-logs` on a gzip file prints strange symbols. Use `file` first, then `zcat`.",
+        "Expecting `*` to include `.env`. Hidden files are not matched by `*`."
+      ],
+      "interview_say": "Linux does not depend on file extensions. I use `file` to see the real type and `stat` for exact size, owner and times. For rotated logs I use `zcat` or `zgrep` without unpacking them.",
+      "try_yourself": "Run `stat inspect/readme` with no options from `day01`. Find the three times: Access, Modify, Change."
+    }
+  ],
+  "cards": [
+    {
+      "id": "d01c01",
+      "topic": "Files",
+      "q": "Which command prints the folder you are in now?",
+      "a": "pwd",
+      "what": "**p**rint **w**orking **d**irectory.",
+      "does": "Prints the full (absolute) path of the current folder.",
+      "flags": [
+        [
+          "-P",
+          "show the real path, with symlinks resolved"
+        ]
+      ],
+      "example": "pwd",
+      "links": [
+        "d01p01"
+      ]
+    },
+    {
+      "id": "d01c02",
+      "topic": "Files",
+      "q": "How do you go back to the folder you were in before?",
+      "a": "cd -",
+      "what": "`cd` changes the current folder. `-` means the previous folder.",
+      "does": "Jumps back and prints the folder name.",
+      "flags": [
+        [
+          "cd ..",
+          "one level up"
+        ],
+        [
+          "cd ~",
+          "home folder (plain `cd` does the same)"
+        ],
+        [
+          "cd /",
+          "the root directory"
+        ]
+      ],
+      "example": [
+        "cd /var/log",
+        "cd -"
+      ],
+      "links": [
+        "d01p01"
+      ]
+    },
+    {
+      "id": "d01c03",
+      "topic": "Files",
+      "q": "Which command shows hidden files too?",
+      "a": "ls -a",
+      "accept": [
+        "ls -la",
+        "ls -al"
+      ],
+      "what": "`ls` lists a folder. Hidden files have names that start with a dot.",
+      "does": "`-a` shows **a**ll files, also `.env`, `.` and `..`.",
+      "flags": [
+        [
+          "-a",
+          "all files, also hidden ones"
+        ],
+        [
+          "-l",
+          "long list: type, permissions, owner, size, date"
+        ],
+        [
+          "-h",
+          "human sizes like 4.0K (with -l)"
+        ],
+        [
+          "-t",
+          "newest first"
+        ],
+        [
+          "-R",
+          "also list sub-folders"
+        ]
+      ],
+      "example": "ls -lah /var/log",
+      "links": [
+        "d01p01",
+        "d01p07"
+      ]
+    },
+    {
+      "id": "d01c04",
+      "topic": "Files",
+      "q": "Which folder holds the config files of the system?",
+      "a": "/etc",
+      "what": "The settings folder.",
+      "does": "Examples: `/etc/nginx/nginx.conf`, `/etc/hosts`, `/etc/ssh/sshd_config`.",
+      "example": "ls /etc/nginx",
+      "links": [
+        "d01p02"
+      ]
+    },
+    {
+      "id": "d01c05",
+      "topic": "Files",
+      "q": "Which folder holds the log files?",
+      "a": "/var/log",
+      "what": "`var` = variable data that changes; logs grow all the time.",
+      "does": "Examples: `/var/log/syslog`, `/var/log/nginx/error.log`.",
+      "example": "tail -n 20 /var/log/syslog",
+      "links": [
+        "d01p02"
+      ]
+    },
+    {
+      "id": "d01c06",
+      "topic": "Files",
+      "q": "What is the home folder of the root user?",
+      "a": "/root",
+      "what": "`root` is the admin user.",
+      "does": "Not the same as `/`, the root directory at the top of the tree.",
+      "links": [
+        "d01p02"
+      ]
+    },
+    {
+      "id": "d01c07",
+      "topic": "Files",
+      "q": "Which command shows where a command's program file is?",
+      "a": "command -v ls",
+      "accept": [
+        "which ls",
+        "type ls",
+        "command -v"
+      ],
+      "what": "A bash built-in that prints what bash will run for a name.",
+      "does": "Prints the path, for example `/usr/bin/ls`.",
+      "flags": [
+        [
+          "which ls",
+          "similar; an older, external program"
+        ],
+        [
+          "type ls",
+          "also says if it is an alias or a built-in"
+        ]
+      ],
+      "example": "command -v ls",
+      "links": [
+        "d01p02"
+      ]
+    },
+    {
+      "id": "d01c08",
+      "topic": "Files",
+      "q": "How do you make a folder and all its missing parent folders?",
+      "a": "mkdir -p",
+      "what": "**m**a**k**e **dir**ectory, with **p**arents.",
+      "does": "Makes every missing level. No error if the folder already exists, so it is safe in scripts.",
+      "flags": [
+        [
+          "-p",
+          "make parents; no error if it exists"
+        ],
+        [
+          "-v",
+          "print each folder it makes"
+        ],
+        [
+          "-m 750",
+          "set the permissions at once"
+        ]
+      ],
+      "example": "mkdir -p app/{logs,config}",
+      "links": [
+        "d01p03",
+        "d01p05"
+      ]
+    },
+    {
+      "id": "d01c09",
+      "topic": "Files",
+      "q": "How do you copy a whole folder with everything inside?",
+      "a": "cp -r",
+      "accept": [
+        "cp -a",
+        "cp -R"
+      ],
+      "what": "`cp` copies. Folders need `-r` (recursive).",
+      "does": "Copies the folder and all levels inside it. The order is always: from, then to.",
+      "flags": [
+        [
+          "-r",
+          "recursive: folders and their content"
+        ],
+        [
+          "-a",
+          "archive: like -r, and keeps owner, permissions and times (good for backups)"
+        ],
+        [
+          "-i",
+          "ask before overwriting"
+        ],
+        [
+          "-v",
+          "print each file"
+        ]
+      ],
+      "example": "cp -r config/ backup/",
+      "links": [
+        "d01p03",
+        "d01p05"
+      ]
+    },
+    {
+      "id": "d01c10",
+      "topic": "Files",
+      "q": "Which command renames a file?",
+      "a": "mv",
+      "what": "**m**o**v**e. Moving to a new name in the same folder is a rename.",
+      "does": "Moves or renames files and folders. It replaces an existing target without asking.",
+      "flags": [
+        [
+          "-i",
+          "ask before overwriting"
+        ],
+        [
+          "-n",
+          "never overwrite"
+        ],
+        [
+          "-v",
+          "print what it does"
+        ]
+      ],
+      "example": "mv app.yml app-prod.yml",
+      "links": [
+        "d01p03"
+      ]
+    },
+    {
+      "id": "d01c11",
+      "topic": "Files",
+      "q": "How do you delete a folder and everything in it?",
+      "a": "rm -r",
+      "what": "**r**e**m**ove, **r**ecursive.",
+      "does": "Deletes for ever. There is no recycle bin. Check the path with `ls` first.",
+      "flags": [
+        [
+          "-r",
+          "folders and their content"
+        ],
+        [
+          "-i",
+          "ask for each file"
+        ],
+        [
+          "-f",
+          "force: never ask, no error (dangerous)"
+        ],
+        [
+          "-v",
+          "print each deleted file"
+        ]
+      ],
+      "example": [
+        "ls releases/v1.0",
+        "rm -r releases/v1.0"
+      ],
+      "links": [
+        "d01p03"
+      ]
+    },
+    {
+      "id": "d01c12",
+      "topic": "Files",
+      "q": "Make a symlink called `current` that points to `releases/v1.2`.",
+      "a": "ln -s releases/v1.2 current",
+      "what": "A **symlink** is a small file that stores a path, like a shortcut.",
+      "does": "Order: TARGET first, then the new NAME.",
+      "flags": [
+        [
+          "-s",
+          "symbolic link (without it: a hard link)"
+        ],
+        [
+          "-f",
+          "replace an existing link"
+        ],
+        [
+          "-n",
+          "do not go inside a link to a folder"
+        ],
+        [
+          "-sfn",
+          "switch a release link in one step"
+        ]
+      ],
+      "example": "ln -sfn releases/v1.1 current",
+      "links": [
+        "d01p04"
+      ]
+    },
+    {
+      "id": "d01c13",
+      "topic": "Files",
+      "q": "Which command prints where a symlink points?",
+      "a": "readlink",
+      "accept": [
+        "readlink current",
+        "readlink -f"
+      ],
+      "what": "Reads the path stored inside a symlink.",
+      "does": "`readlink current` prints `releases/v1.2`.",
+      "flags": [
+        [
+          "-f",
+          "full absolute path, following every link"
+        ]
+      ],
+      "example": "readlink -f current",
+      "links": [
+        "d01p04"
+      ]
+    },
+    {
+      "id": "d01c14",
+      "topic": "Files",
+      "q": "Which link still works after the original file is deleted?",
+      "a": "hard link",
+      "accept": [
+        "a hard link",
+        "ln"
+      ],
+      "what": "A hard link is a second name for the same inode (the file record).",
+      "does": "The data stays until the last name is deleted. A symlink only stores a path, so it breaks.",
+      "flags": [
+        [
+          "ln FILE NAME",
+          "hard link"
+        ],
+        [
+          "ln -s FILE NAME",
+          "symlink"
+        ]
+      ],
+      "links": [
+        "d01p04"
+      ]
+    },
+    {
+      "id": "d01c15",
+      "topic": "Files",
+      "q": "Which command tells the real type of a file, not by its name?",
+      "a": "file",
+      "what": "Reads the first bytes of the file.",
+      "does": "Says for example `gzip compressed data` or `Bourne-Again shell script`.",
+      "example": "file old-logs",
+      "links": [
+        "d01p07"
+      ]
+    },
+    {
+      "id": "d01c16",
+      "topic": "Files",
+      "q": "How do you print only chosen details of a file (size, owner, link count)?",
+      "a": "stat -c",
+      "accept": [
+        "stat --format",
+        "stat"
+      ],
+      "what": "`stat` shows file details; `-c` takes a format.",
+      "does": "Prints only the fields in the format.",
+      "flags": [
+        [
+          "%n",
+          "name"
+        ],
+        [
+          "%s",
+          "size in bytes"
+        ],
+        [
+          "%U",
+          "owner"
+        ],
+        [
+          "%h",
+          "number of hard links"
+        ],
+        [
+          "%F",
+          "file type"
+        ],
+        [
+          "%A",
+          "permissions as letters"
+        ]
+      ],
+      "example": "stat -c '%n %s %U' app.log",
+      "links": [
+        "d01p02",
+        "d01p04",
+        "d01p07"
+      ]
+    },
+    {
+      "id": "d01c17",
+      "topic": "Files",
+      "q": "How do you read a `.gz` log without unpacking it?",
+      "a": "zcat",
+      "what": "`cat` for gzip files.",
+      "does": "Unpacks in memory and prints the text. The file on disk stays compressed.",
+      "flags": [
+        [
+          "zgrep",
+          "search inside a .gz file"
+        ],
+        [
+          "zless",
+          "read it page by page"
+        ]
+      ],
+      "example": "zcat syslog.2.gz | tail",
+      "links": [
+        "d01p07"
+      ]
+    },
+    {
+      "id": "d01c18",
+      "topic": "Files",
+      "q": "Which wildcard matches exactly one character?",
+      "a": "?",
+      "what": "A wildcard (glob) is a pattern for file names. Bash expands it before the command runs.",
+      "does": "`api-?.log` matches `api-1.log` but not `api-10.log`.",
+      "flags": [
+        [
+          "*",
+          "any text"
+        ],
+        [
+          "?",
+          "one character"
+        ],
+        [
+          "[1-5]",
+          "one character from 1 to 5"
+        ],
+        [
+          "{a,b}",
+          "braces: make words, not a wildcard"
+        ]
+      ],
+      "example": "echo api-?.log",
+      "links": [
+        "d01p05",
+        "d01p06"
+      ]
+    },
+    {
+      "id": "d01c19",
+      "topic": "Scripting",
+      "q": "What is the first line of a bash script called, and what is it?",
+      "a": "#!/bin/bash",
+      "accept": [
+        "shebang"
+      ],
+      "what": "The **shebang**.",
+      "does": "Tells Linux which program runs the file when it is started with `./script.sh`.",
+      "example": [
+        "#!/bin/bash",
+        "echo \"hello\""
+      ],
+      "links": [
+        "d01p03"
+      ]
+    },
+    {
+      "id": "d01c20",
+      "topic": "Scripting",
+      "q": "Which line makes a script stop at the first error?",
+      "a": "set -euo pipefail",
+      "accept": [
+        "set -e"
+      ],
+      "what": "Safety options for bash scripts. Put it right after the shebang.",
+      "does": "Stops the script instead of going on with broken data.",
+      "flags": [
+        [
+          "-e",
+          "exit when a command fails"
+        ],
+        [
+          "-u",
+          "error on a variable that is not set"
+        ],
+        [
+          "-o pipefail",
+          "a pipe fails if any part fails"
+        ]
+      ],
+      "example": [
+        "#!/bin/bash",
+        "set -euo pipefail"
+      ],
+      "links": [
+        "d01p03",
+        "d01p05"
+      ]
+    },
+    {
+      "id": "d01c21",
+      "topic": "Scripting",
+      "q": "How do you make a script executable and run it from the current folder?",
+      "a": "chmod +x script.sh && ./script.sh",
+      "accept": [
+        "chmod +x"
+      ],
+      "what": "`chmod +x` adds the execute permission. `./` means \"this folder\".",
+      "does": "Without `+x` the user gets `Permission denied`. `bash script.sh` works without it.",
+      "flags": [
+        [
+          "bash -n file.sh",
+          "check the syntax only"
+        ],
+        [
+          "shellcheck file.sh",
+          "find common bugs"
+        ]
+      ],
+      "example": [
+        "chmod +x prepare-release.sh",
+        "./prepare-release.sh"
+      ],
+      "links": [
+        "d01p03"
+      ]
+    }
+  ],
+  "interview": [
+    {
+      "q": "What is the difference between an absolute path and a relative path?",
+      "a": "An absolute path starts at the root directory `/`, for example `/var/log/nginx`. It works from any folder. A relative path starts from the current folder, for example `logs/app.log`.",
+      "topic": "Files"
+    },
+    {
+      "q": "What is the difference between a hard link and a symbolic link?",
+      "a": "A hard link is a second name for the same data, so it still works if the original is deleted. A symlink stores a path. It breaks when the target is deleted, but it can point to folders and to other disks.",
+      "topic": "Files"
+    },
+    {
+      "q": "Where are config files and log files kept in Linux?",
+      "a": "Config files are in `/etc`, for example `/etc/nginx/nginx.conf`. Logs are in `/var/log`, for example `/var/log/syslog`.",
+      "topic": "Files"
+    },
+    {
+      "q": "How do you see hidden files? What makes a file hidden?",
+      "a": "A file is hidden when its name starts with a dot, like `.env`. `ls -a` or `ls -la` shows hidden files.",
+      "topic": "Files"
+    },
+    {
+      "q": "Why is `rm -rf` dangerous?",
+      "a": "`-r` deletes folders with everything inside and `-f` never asks and hides errors. There is no recycle bin. With a wrong or empty variable it can delete the wrong folder.",
+      "topic": "Files"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "pwd",
+      "meaning": "Print the current folder (full path)",
+      "example": "pwd",
+      "topic": "Files"
+    },
+    {
+      "cmd": "cd -",
+      "meaning": "Go back to the previous folder",
+      "example": "cd -",
+      "topic": "Files"
+    },
+    {
+      "cmd": "ls -la",
+      "meaning": "List all files (also hidden) with details",
+      "example": "ls -la ~/bash-practice",
+      "topic": "Files"
+    },
+    {
+      "cmd": "mkdir -p",
+      "meaning": "Create folder and missing parents",
+      "example": "mkdir -p app/{logs,config}",
+      "topic": "Files"
+    },
+    {
+      "cmd": "touch",
+      "meaning": "Create an empty file or update its time",
+      "example": "touch app.log",
+      "topic": "Files"
+    },
+    {
+      "cmd": "cp -r",
+      "meaning": "Copy a folder with all content",
+      "example": "cp -r config/ backup/",
+      "topic": "Files"
+    },
+    {
+      "cmd": "mv",
+      "meaning": "Move or rename",
+      "example": "mv app.yml app-prod.yml",
+      "topic": "Files"
+    },
+    {
+      "cmd": "rm -r",
+      "meaning": "Delete a folder and its content (no undo)",
+      "example": "rm -r releases/v1.0",
+      "topic": "Files"
+    },
+    {
+      "cmd": "tree",
+      "meaning": "Show folders as a tree",
+      "example": "tree releases",
+      "topic": "Files"
+    },
+    {
+      "cmd": "ln -s",
+      "meaning": "Create a symlink (TARGET then NAME)",
+      "example": "ln -s releases/v1.2 current",
+      "topic": "Files"
+    },
+    {
+      "cmd": "ln -sfn",
+      "meaning": "Replace an existing symlink",
+      "example": "ln -sfn releases/v1.1 current",
+      "topic": "Files"
+    },
+    {
+      "cmd": "ln",
+      "meaning": "Create a hard link",
+      "example": "ln db.conf db-hard.conf",
+      "topic": "Files"
+    },
+    {
+      "cmd": "readlink",
+      "meaning": "Show where a symlink points",
+      "example": "readlink current",
+      "topic": "Files"
+    },
+    {
+      "cmd": "stat -c",
+      "meaning": "Show chosen file details",
+      "example": "stat -c '%n %s %U' file",
+      "topic": "Files"
+    },
+    {
+      "cmd": "file",
+      "meaning": "Show the real type of a file",
+      "example": "file old-logs",
+      "topic": "Files"
+    },
+    {
+      "cmd": "command -v",
+      "meaning": "Show where a command lives",
+      "example": "command -v ls",
+      "topic": "Files"
+    },
+    {
+      "cmd": "* ? [ ]",
+      "meaning": "Wildcards: any text, one char, one of a list",
+      "example": "ls app-0[1-5].log",
+      "topic": "Files"
+    },
+    {
+      "cmd": "{a,b}",
+      "meaning": "Brace expansion: make several words",
+      "example": "echo v{1..3}",
+      "topic": "Files"
+    },
+    {
+      "cmd": "#!/bin/bash",
+      "meaning": "Shebang: run this file with bash",
+      "example": "#!/bin/bash",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "set -euo pipefail",
+      "meaning": "Stop a script at the first error",
+      "example": "set -euo pipefail",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "NAME=\"value\"",
+      "meaning": "Make a variable (no spaces around =); use it as \"$NAME\"",
+      "example": "NEW=\"releases/v1.2\"",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "bash -n",
+      "meaning": "Check a script's syntax without running it",
+      "example": "bash -n deploy.sh",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "shellcheck",
+      "meaning": "Find common bugs in a script",
+      "example": "shellcheck deploy.sh",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "chmod +x; ./",
+      "meaning": "Make a script executable, run it from this folder",
+      "example": "chmod +x deploy.sh && ./deploy.sh",
+      "topic": "Scripting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Directory layout (/etc /var /home /tmp /usr /opt /proc)",
+      "problems": [
+        "d01p02"
+      ]
+    },
+    {
+      "item": "ls -la, hidden files",
+      "problems": [
+        "d01p01",
+        "d01p07"
+      ]
+    },
+    {
+      "item": "cd, pwd",
+      "problems": [
+        "d01p01"
+      ]
+    },
+    {
+      "item": "mkdir -p, touch",
+      "problems": [
+        "d01p03",
+        "d01p05"
+      ]
+    },
+    {
+      "item": "cp -r, mv, rm",
+      "problems": [
+        "d01p03",
+        "d01p05"
+      ]
+    },
+    {
+      "item": "tree",
+      "problems": [
+        "d01p03"
+      ]
+    },
+    {
+      "item": "First script: shebang, comments, set -euo pipefail, quoted variables",
+      "problems": [
+        "d01p03"
+      ]
+    },
+    {
+      "item": "Check a script: bash -n, shellcheck; run with chmod +x and ./",
+      "problems": [
+        "d01p03"
+      ]
+    },
+    {
+      "item": "stat, file",
+      "problems": [
+        "d01p02",
+        "d01p07"
+      ]
+    },
+    {
+      "item": "Hard link vs symlink (ln, ln -s)",
+      "problems": [
+        "d01p04"
+      ]
+    },
+    {
+      "item": "Wildcards * ? [ ]",
+      "problems": [
+        "d01p05",
+        "d01p06"
+      ]
+    },
+    {
+      "item": "Brace expansion {}",
+      "problems": [
+        "d01p03",
+        "d01p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day01"
+}

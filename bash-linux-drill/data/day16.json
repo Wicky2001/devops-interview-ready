@@ -1,0 +1,761 @@
+{
+  "day": 16,
+  "week": 3,
+  "title": "Cron, systemd and logs",
+  "goal": "Schedule jobs with cron, write and check a systemd service file, read service logs, and understand log rotation.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day16/bin ~/bash-practice/day16/www ~/bash-practice/day16/logs && cd ~/bash-practice/day16",
+    "# small jobs for the crontab problem",
+    "for j in health backup report cleanup; do printf '#!/bin/bash\\necho \"%s ran at $(date +%%F_%%T)\"\\n' \"$j\" > \"$j.sh\"; chmod +x \"$j.sh\"; done",
+    "# P2: a nightly job that uses a tool from ~/bash-practice/day16/bin",
+    "printf '#!/bin/bash\\necho \"report-tool: 42 todos open\"\\n' > bin/report-tool",
+    "chmod +x bin/report-tool",
+    "printf '%s\\n' '#!/bin/bash' 'report-tool >> nightly.log' 'echo \"nightly done\"' > nightly.sh",
+    "chmod +x nightly.sh",
+    "# P3: a page for the service to serve",
+    "echo '{\"status\":\"UP\"}' > www/health.json",
+    "# P5: a broken unit file",
+    "printf '%s\\n' '[Unit]' 'Description=Todo API (practice)' 'After=network.target' '' '[service]' 'ExecStart=/usr/local/bin/todo-api --port 8080' 'Restart=sometimes' '' '[Install]' 'WantedBy=multi-user.target' > broken-todo.service",
+    "# P6: a log for logrotate",
+    "printf 'line %s\\n' 1 2 3 > logs/todo-api.log",
+    "cd ~/bash-practice/day16"
+  ],
+  "warmup": [
+    {
+      "q": "What is the difference between SIGTERM and SIGKILL?",
+      "a": "SIGTERM (15) asks the process to stop; it can clean up. SIGKILL (9) stops it at once; it cannot be caught.",
+      "from_day": 15
+    },
+    {
+      "q": "How do you keep a job running after SSH logout?",
+      "a": "`nohup cmd > log 2>&1 &`, or run it in `tmux`/`screen`, or as a systemd service.",
+      "from_day": 15
+    },
+    {
+      "q": "How do you make a timestamp for a file name?",
+      "a": "`date +%Y%m%d-%H%M%S`",
+      "from_day": 13
+    },
+    {
+      "q": "How do you list `.log` files older than 7 days?",
+      "a": "`find /path -name '*.log' -mtime +7`",
+      "from_day": 12
+    }
+  ],
+  "problems": [
+    {
+      "id": "d16p01",
+      "title": "Write and install crontab lines",
+      "type": "command",
+      "topic": "Services",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The team needs four scheduled jobs on the to-do server: a health check every 5 minutes, a backup at 02:30 every night, a report at 09:00 on working days, and a cleanup on the first day of each month.",
+      "task": [
+        "**Warning:** this changes your real user crontab. The last step removes the practice lines again. If you already use cron, run `crontab -l > ~/crontab-backup.txt` first.",
+        "Write the four lines into `my-cron.txt`. Use absolute paths and send output to a log file with `>> file 2>&1`.",
+        "Check that each line has at least 6 fields (5 time fields + the command).",
+        "Install them without deleting other lines: `(crontab -l 2>/dev/null; cat my-cron.txt) | crontab -`. List with `crontab -l`.",
+        "Remove the practice lines: `crontab -l | grep -v bash-practice | crontab -`."
+      ],
+      "hints": [
+        "The 5 fields: minute, hour, day of month, month, day of week. `*` = every.",
+        "`*/5` = every 5. `1-5` = Monday to Friday. `0 0 1 * *` = midnight on day 1 of each month.",
+        "`crontab file` REPLACES the whole crontab. The `(crontab -l; cat file) | crontab -` pattern keeps old lines."
+      ],
+      "solution": [
+        "cat > my-cron.txt <<EOF",
+        "# m   h  dom mon dow  command",
+        "*/5   *  *   *   *    $HOME/bash-practice/day16/health.sh >> $HOME/bash-practice/day16/logs/cron.log 2>&1",
+        "30    2  *   *   *    $HOME/bash-practice/day16/backup.sh >> $HOME/bash-practice/day16/logs/cron.log 2>&1",
+        "0     9  *   *   1-5  $HOME/bash-practice/day16/report.sh >> $HOME/bash-practice/day16/logs/cron.log 2>&1",
+        "0     0  1   *   *    $HOME/bash-practice/day16/cleanup.sh >> $HOME/bash-practice/day16/logs/cron.log 2>&1",
+        "EOF",
+        "grep -v '^#' my-cron.txt | awk '{ if (NF >= 6) print \"ok  \", $1, $2, $3, $4, $5; else print \"BAD \", $0 }'",
+        "(crontab -l 2>/dev/null; cat my-cron.txt) | crontab -",
+        "echo \"practice lines installed: $(crontab -l | grep -c bash-practice)\"",
+        "crontab -l | grep -v bash-practice | crontab -",
+        "echo \"practice lines left: $(crontab -l 2>/dev/null | grep -c bash-practice)\""
+      ],
+      "explanation": [
+        {
+          "part": "*/5 * * * *",
+          "meaning": "Every 5 minutes."
+        },
+        {
+          "part": "30 2 * * *",
+          "meaning": "Every day at 02:30."
+        },
+        {
+          "part": "0 9 * * 1-5",
+          "meaning": "09:00, Monday (1) to Friday (5). Sunday is 0 (or 7)."
+        },
+        {
+          "part": "0 0 1 * *",
+          "meaning": "00:00 on the 1st day of every month."
+        },
+        {
+          "part": ">> log 2>&1",
+          "meaning": "Cron has no screen. Without a redirect, output is mailed or lost."
+        },
+        {
+          "part": "(crontab -l; cat file) | crontab -",
+          "meaning": "Install old lines plus new lines. `crontab -` reads the new crontab from stdin."
+        }
+      ],
+      "expected_output": "ok   */5 * * * *\nok   30 2 * * *\nok   0 9 * * 1-5\nok   0 0 1 * *\npractice lines installed: 4\npractice lines left: 0",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The count is 4 if the user had no crontab before. On WSL without systemd, cron does not run by itself: start it with `sudo service cron start`.",
+      "verified": true,
+      "mistakes": [
+        "`crontab my-cron.txt` replaces all existing jobs of the user. Other jobs are lost without a warning.",
+        "Using relative paths like `./backup.sh`: cron starts in the home folder, so the script is not found.",
+        "Using `crontab -r` to remove one line: it deletes the whole crontab (r is next to e on the keyboard)."
+      ],
+      "interview_say": "A crontab line has five time fields, minute, hour, day of month, month and day of week, then the command. I use absolute paths, redirect output to a log, and test the script by hand first.",
+      "try_yourself": "Write the cron line for \"every Sunday at 03:15\". Check it on a site like crontab.guru in your browser.",
+      "table": {
+        "head": [
+          "Field",
+          "Range",
+          "Example"
+        ],
+        "rows": [
+          [
+            "minute",
+            "0-59",
+            "`*/15` every 15 min"
+          ],
+          [
+            "hour",
+            "0-23",
+            "`2` = 02:00"
+          ],
+          [
+            "day of month",
+            "1-31",
+            "`1` = first day"
+          ],
+          [
+            "month",
+            "1-12",
+            "`*` every month"
+          ],
+          [
+            "day of week",
+            "0-7 (0 and 7 = Sunday)",
+            "`1-5` working days"
+          ],
+          [
+            "shortcut",
+            "`@reboot`, `@daily`, `@hourly`",
+            "`@reboot /path/start.sh`"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d16p02",
+      "title": "Explain the error: it works in my terminal, not in cron",
+      "type": "explain-error",
+      "topic": "Services",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`nightly.sh` works when the user runs it by hand, but in cron it writes nothing. Cron runs jobs with a tiny environment: `PATH=/usr/bin:/bin`, no `.bashrc`, and the home folder as the working folder. The user simulates that with `env -i`.",
+      "task": [
+        "Add the tool folder to PATH like in an interactive shell: `export PATH=\"$HOME/bash-practice/day16/bin:$PATH\"`. Run `./nightly.sh`. It works.",
+        "Simulate cron: `env -i HOME=\"$HOME\" PATH=/usr/bin:/bin /bin/sh -c 'cd ~/bash-practice/day16 && ./nightly.sh'`. Read the error.",
+        "Fix `nightly.sh`: set PATH at the top, and use an absolute path for the log.",
+        "Run the cron simulation again."
+      ],
+      "hints": [
+        "`env -i` starts a command with an empty environment, like cron does.",
+        "The error is `report-tool: command not found`, because `~/bash-practice/day16/bin` is not in cron's PATH.",
+        "Put `PATH=$HOME/bash-practice/day16/bin:/usr/local/bin:/usr/bin:/bin` at the top of the script."
+      ],
+      "solution": [
+        "export PATH=\"$HOME/bash-practice/day16/bin:$PATH\"",
+        "./nightly.sh",
+        "echo \"--- like cron ---\"",
+        "env -i HOME=\"$HOME\" PATH=/usr/bin:/bin /bin/sh -c 'cd ~/bash-practice/day16 && ./nightly.sh'",
+        "cat > nightly.sh <<'EOF'",
+        "#!/bin/bash",
+        "PATH=$HOME/bash-practice/day16/bin:/usr/local/bin:/usr/bin:/bin   # cron gives only /usr/bin:/bin",
+        "LOG=$HOME/bash-practice/day16/logs/nightly.log                    # absolute path, not ./",
+        "report-tool >> \"$LOG\"",
+        "echo \"nightly done\"",
+        "EOF",
+        "echo \"--- like cron, after the fix ---\"",
+        "env -i HOME=\"$HOME\" PATH=/usr/bin:/bin /bin/sh -c 'cd ~/bash-practice/day16 && ./nightly.sh'",
+        "cat logs/nightly.log"
+      ],
+      "explanation": [
+        {
+          "part": "env -i",
+          "meaning": "Run with an empty environment. Then add only HOME and the small cron PATH."
+        },
+        {
+          "part": "command not found",
+          "meaning": "The interactive PATH (from `.bashrc` or `export`) does not exist in cron."
+        },
+        {
+          "part": "PATH=... at the top",
+          "meaning": "The script brings its own PATH, so it works in cron, systemd and CI."
+        },
+        {
+          "part": "absolute LOG path",
+          "meaning": "Cron's working folder is the home folder, not the script's folder."
+        }
+      ],
+      "expected_output": "nightly done\n--- like cron ---\n./nightly.sh: line 2: report-tool: command not found\nnightly done\n--- like cron, after the fix ---\nnightly done\nreport-tool: 42 todos open",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`date +%F` directly in a crontab line: cron cuts the command at `%`. Write `date +\\%F` or put it in a script.",
+        "Testing a cron job only in the terminal. Always test with a cron-like environment or check the cron log (`grep CRON /var/log/syslog`)."
+      ],
+      "interview_say": "Cron runs with a minimal environment: a small PATH, no profile files, and the home folder as working folder. So my cron scripts use absolute paths, set PATH, and log their output to a file.",
+      "try_yourself": "Run `env -i /bin/sh -c 'echo $PATH; pwd'`. What PATH and folder do you see?",
+      "table": {
+        "head": [
+          "Cron problem",
+          "Fix"
+        ],
+        "rows": [
+          [
+            "small PATH",
+            "absolute paths or set PATH in the script/crontab"
+          ],
+          [
+            "no `.bashrc` variables",
+            "set them in the script or source a file"
+          ],
+          [
+            "`%` in a crontab line means new line",
+            "write `\\%`, for example `date +\\%F`"
+          ],
+          [
+            "output is lost",
+            "`>> /path/job.log 2>&1`"
+          ],
+          [
+            "wrong working folder",
+            "`cd /path || exit 1` first"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d16p03",
+      "title": "Write a systemd service file and check it",
+      "type": "script",
+      "topic": "Services",
+      "minutes": 14,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The to-do API must start automatically after a reboot and restart when it crashes. On Linux servers this is a systemd service. The user writes the unit file and checks it with `systemd-analyze verify`, which works even without a running systemd.",
+      "task": [
+        "Write `todo-api.service` with three sections: `[Unit]`, `[Service]`, `[Install]`.",
+        "In `[Service]`: run `/usr/bin/python3 -m http.server 8080` in the folder `www`, as your user, restart on failure after 3 seconds, and set `APP_ENV=prod`.",
+        "In `[Install]`: `WantedBy=multi-user.target`.",
+        "Check it with `systemd-analyze verify ./todo-api.service`. No output means no problems.",
+        "Make a copy with a typo (`Restart=allways`) and check that copy too."
+      ],
+      "hints": [
+        "`ExecStart` needs the full path of the program: `/usr/bin/python3`.",
+        "`WorkingDirectory=`, `User=`, `Restart=on-failure`, `RestartSec=3`, `Environment=APP_ENV=prod`.",
+        "Use `sed 's/on-failure/allways/' todo-api.service > typo.service` for the copy."
+      ],
+      "solution": [
+        "cat > todo-api.service <<EOF",
+        "[Unit]",
+        "Description=Todo API (practice)",
+        "After=network.target",
+        "",
+        "[Service]",
+        "WorkingDirectory=$HOME/bash-practice/day16/www",
+        "ExecStart=/usr/bin/python3 -m http.server 8080",
+        "User=$USER",
+        "Restart=on-failure",
+        "RestartSec=3",
+        "Environment=APP_ENV=prod",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        "EOF",
+        "systemd-analyze verify ./todo-api.service && echo \"todo-api.service: no problems found\"",
+        "sed 's/on-failure/allways/' todo-api.service > typo.service",
+        "systemd-analyze verify ./typo.service"
+      ],
+      "explanation": [
+        {
+          "part": "[Unit] Description, After",
+          "meaning": "A name for humans, and start after the network is up."
+        },
+        {
+          "part": "ExecStart=/usr/bin/python3 ...",
+          "meaning": "The command to run. Use the full path."
+        },
+        {
+          "part": "WorkingDirectory, User",
+          "meaning": "Run in this folder, as this user (never root if not needed)."
+        },
+        {
+          "part": "Restart=on-failure, RestartSec=3",
+          "meaning": "Restart after a crash (non-zero exit), wait 3 seconds first."
+        },
+        {
+          "part": "Environment=",
+          "meaning": "Set environment variables for the service. For secrets, prefer `EnvironmentFile=` with a 600 file."
+        },
+        {
+          "part": "WantedBy=multi-user.target",
+          "meaning": "`systemctl enable` makes it start at normal boot."
+        },
+        {
+          "part": "systemd-analyze verify",
+          "meaning": "Check the syntax and the program path without starting anything."
+        }
+      ],
+      "expected_output": "todo-api.service: no problems found\n/home/wicky/bash-practice/day16/typo.service:9: Failed to parse service restart specifier, ignoring: allways",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "On Ubuntu 22.04 (systemd 249) the warning text can be a little different.",
+      "verified": true,
+      "mistakes": [
+        "Using `ExecStart=python3 app.py`: older systemd versions need an absolute path, and the right Python is not guaranteed.",
+        "Forgetting `[Install]`: then `systemctl enable` says the unit has no installation config and it never starts at boot.",
+        "Running the service as root by default. Add `User=` with a service user."
+      ],
+      "interview_say": "A systemd unit has `[Unit]` for description and order, `[Service]` with `ExecStart`, `User`, `Restart`, and `[Install]` with `WantedBy=multi-user.target`. I check it with `systemd-analyze verify` before I install it.",
+      "try_yourself": "Add `StandardOutput=append:/home/wicky/bash-practice/day16/logs/todo-api.log` and verify again."
+    },
+    {
+      "id": "d16p04",
+      "title": "systemctl and journalctl (WSL with systemd only)",
+      "type": "concept",
+      "topic": "Services",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "With the unit file ready, the user installs it, starts it, enables it at boot, checks its status and reads its logs. These commands need a running systemd and sudo, so they are not run in the sandbox.",
+      "task": [
+        "Check if systemd runs in your WSL: `ps -p 1 -o comm=`. If it prints `systemd`, continue. If it prints `init`, systemd is off: **read only** (see the note).",
+        "Install: `sudo cp todo-api.service /etc/systemd/system/` and `sudo systemctl daemon-reload`.",
+        "Start and enable: `sudo systemctl enable --now todo-api`.",
+        "Check: `systemctl status todo-api` and `curl -s localhost:8080/health.json`.",
+        "Logs: `journalctl -u todo-api --since \"10 min ago\"`, and live with `-f`. Clean up: `sudo systemctl disable --now todo-api` and `sudo rm /etc/systemd/system/todo-api.service`."
+      ],
+      "hints": [
+        "`daemon-reload` makes systemd read changed unit files.",
+        "`enable` = start at boot; `--now` = also start now.",
+        "`journalctl -u NAME` shows logs of one unit; `-f` follows; `-n 50` last 50 lines; `--since` filters by time."
+      ],
+      "solution": [
+        "ps -p 1 -o comm=",
+        "sudo cp todo-api.service /etc/systemd/system/",
+        "sudo systemctl daemon-reload",
+        "sudo systemctl enable --now todo-api",
+        "systemctl status todo-api --no-pager",
+        "curl -s localhost:8080/health.json",
+        "journalctl -u todo-api --since \"10 min ago\" --no-pager",
+        "# clean up",
+        "sudo systemctl disable --now todo-api",
+        "sudo rm /etc/systemd/system/todo-api.service",
+        "sudo systemctl daemon-reload"
+      ],
+      "explanation": [
+        {
+          "part": "ps -p 1 -o comm=",
+          "meaning": "Name of process 1. `systemd` = systemd is running."
+        },
+        {
+          "part": "systemctl daemon-reload",
+          "meaning": "Reload unit files after a change."
+        },
+        {
+          "part": "enable --now",
+          "meaning": "Start at boot and start right now."
+        },
+        {
+          "part": "status",
+          "meaning": "Loaded? Enabled? Active (running)? Main PID, memory, and the last log lines."
+        },
+        {
+          "part": "journalctl -u NAME",
+          "meaning": "Logs of the unit. `-f` follow, `--since`, `-n`, `-p err` (only errors)."
+        },
+        {
+          "part": "If systemd is off (WSL)",
+          "meaning": "Read only. To turn it on: add `[boot]` and `systemd=true` to `/etc/wsl.conf` (system file, sudo), then run `wsl --shutdown` in Windows PowerShell."
+        }
+      ],
+      "expected_output": "",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "Typical output on Ubuntu 24.04 with systemd. PIDs, times, memory and the host name will be different. On a failed start, `Active:` shows `failed` and the log lines show why.",
+      "verified": false,
+      "typical_output": "systemd\nCreated symlink /etc/systemd/system/multi-user.target.wants/todo-api.service → /etc/systemd/system/todo-api.service.\n● todo-api.service - Todo API (practice)\n     Loaded: loaded (/etc/systemd/system/todo-api.service; enabled; preset: enabled)\n     Active: active (running) since Tue 2026-10-20 10:15:02 +0530; 2s ago\n   Main PID: 2481 (python3)\n      Tasks: 1 (limit: 9389)\n     Memory: 9.8M\n        CPU: 61ms\n     CGroup: /system.slice/todo-api.service\n             └─2481 /usr/bin/python3 -m http.server 8080\n\nOct 20 10:15:02 laptop systemd[1]: Started todo-api.service - Todo API (practice).\n{\"status\":\"UP\"}\nOct 20 10:15:02 laptop systemd[1]: Started todo-api.service - Todo API (practice).\nOct 20 10:15:05 laptop python3[2481]: 127.0.0.1 - - [20/Oct/2026 10:15:05] \"GET /health.json HTTP/1.1\" 200 -\nRemoved \"/etc/systemd/system/multi-user.target.wants/todo-api.service\".",
+      "mistakes": [
+        "Changing the unit file and forgetting `daemon-reload`: systemd warns `The unit file ... changed on disk. Run 'systemctl daemon-reload'`.",
+        "`systemctl start` without `enable`: the service does not come back after a reboot.",
+        "On WSL without systemd: `System has not been booted with systemd as init system (PID 1). Can't operate.`"
+      ],
+      "interview_say": "I install a unit into `/etc/systemd/system`, run `daemon-reload`, then `systemctl enable --now`. For problems I check `systemctl status` and `journalctl -u name -f`.",
+      "try_yourself": "On a system with systemd, run `systemctl list-units --type=service --state=running` to see all running services."
+    },
+    {
+      "id": "d16p05",
+      "title": "Find the bug: the broken unit file",
+      "type": "fix-bug",
+      "topic": "Services",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate wrote `broken-todo.service`. On the server, `systemctl start` fails and the logs are full of warnings. The user checks it offline with `systemd-analyze verify` and fixes every problem.",
+      "task": [
+        "Run `systemd-analyze verify ./broken-todo.service` and read every line.",
+        "Find 3 bugs: a section name, a missing program, and a wrong `Restart=` value.",
+        "Write the fixed file as `todo-fixed.service` (use python3 http.server like P3). Verify it."
+      ],
+      "hints": [
+        "Section names are case-sensitive: `[Service]`.",
+        "`/usr/local/bin/todo-api` does not exist. Check with `ls` or `command -v`.",
+        "Valid Restart values: `no`, `on-failure`, `always`, `on-abnormal` ..."
+      ],
+      "solution": [
+        "systemd-analyze verify ./broken-todo.service || echo \"exit code: $?\"",
+        "ls /usr/local/bin/todo-api || true",
+        "cat > todo-fixed.service <<'EOF'",
+        "[Unit]",
+        "Description=Todo API (practice)",
+        "After=network.target",
+        "",
+        "[Service]",
+        "ExecStart=/usr/bin/python3 -m http.server 8080",
+        "Restart=on-failure",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        "EOF",
+        "systemd-analyze verify ./todo-fixed.service && echo \"todo-fixed.service: no problems found\""
+      ],
+      "explanation": [
+        {
+          "part": "Unknown section 'service'",
+          "meaning": "Bug 1: `[service]` must be `[Service]`. Because of it, systemd also saw no ExecStart and refused the unit."
+        },
+        {
+          "part": "is not executable: No such file",
+          "meaning": "Bug 2: the program path does not exist."
+        },
+        {
+          "part": "Failed to parse service restart specifier",
+          "meaning": "Bug 3: `sometimes` is not a valid value; systemd ignores the line."
+        }
+      ],
+      "expected_output": "/home/wicky/bash-practice/day16/broken-todo.service:5: Unknown section 'service'. Ignoring.\nbroken-todo.service: Service has no ExecStart=, ExecStop=, or SuccessAction=. Refusing.\nUnit broken-todo.service has a bad unit file setting.\nexit code: 1\nls: cannot access '/usr/local/bin/todo-api': No such file or directory\ntodo-fixed.service: no problems found",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "Ubuntu 22.04 (systemd 249) prints similar warnings with small text differences.",
+      "verified": true,
+      "mistakes": [
+        "Reading only the last line (`bad unit file setting`). The first lines show the real cause.",
+        "Thinking a warning like `ignoring` is harmless. An ignored `Restart=` line means the service will NOT restart after a crash."
+      ],
+      "checks": [
+        {
+          "run": "systemd-analyze verify ./broken-todo.service",
+          "expect": "Unknown section 'service'"
+        },
+        {
+          "run": "sed 's/^\\[service\\]/[Service]/' broken-todo.service > b2.service; systemd-analyze verify ./b2.service",
+          "expect": "Command /usr/local/bin/todo-api is not executable"
+        },
+        {
+          "run": "sed 's/^\\[service\\]/[Service]/' broken-todo.service > b3.service; systemd-analyze verify ./b3.service",
+          "expect": "Failed to parse service restart specifier"
+        }
+      ],
+      "interview_say": "Before installing a unit file, I run `systemd-analyze verify`. It finds wrong section names, invalid values and missing programs without touching the running system.",
+      "try_yourself": "Add `Type=simpel` (a typo) to the fixed file and verify again. What does systemd say?"
+    },
+    {
+      "id": "d16p06",
+      "title": "logrotate: dry-run a rotation config",
+      "type": "command",
+      "topic": "Services",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The API log grows every day and will fill the disk. logrotate renames old logs (`app.log.1`, `app.log.2.gz`) and deletes the oldest. The user writes a config for the practice log and tests it in debug mode, which changes nothing.",
+      "task": [
+        "Write `todo-logrotate.conf` for `logs/todo-api.log`: daily, keep 7, compress, missingok, notifempty.",
+        "Dry run: `logrotate -d -s ./logrotate.state todo-logrotate.conf`.",
+        "Force a real rotation once in the practice folder: `logrotate -f -s ./logrotate.state todo-logrotate.conf`, then `ls logs`."
+      ],
+      "hints": [
+        "`-d` = debug: only prints what it would do.",
+        "`-s FILE` = own state file, so no root is needed for practice.",
+        "On a server, configs live in `/etc/logrotate.d/` and run daily from cron or a systemd timer."
+      ],
+      "solution": [
+        "cat > todo-logrotate.conf <<EOF",
+        "$HOME/bash-practice/day16/logs/todo-api.log {",
+        "    daily",
+        "    rotate 7",
+        "    compress",
+        "    missingok",
+        "    notifempty",
+        "}",
+        "EOF",
+        "logrotate -d -s ./logrotate.state todo-logrotate.conf 2>&1 | grep -E 'rotating pattern|considering|needs rotating|does not need'",
+        "logrotate -f -s ./logrotate.state todo-logrotate.conf",
+        "ls logs"
+      ],
+      "explanation": [
+        {
+          "part": "daily / rotate 7",
+          "meaning": "Rotate once a day, keep 7 old files."
+        },
+        {
+          "part": "compress",
+          "meaning": "gzip the old files (`.1.gz`). Add `delaycompress` to keep the newest old file plain."
+        },
+        {
+          "part": "missingok / notifempty",
+          "meaning": "No error if the log is missing; do not rotate an empty log."
+        },
+        {
+          "part": "-d / -f / -s",
+          "meaning": "Debug (dry run) / force now / state file path."
+        },
+        {
+          "part": "copytruncate",
+          "meaning": "Option for apps that keep the file open and cannot reopen logs (copy, then empty the original)."
+        },
+        {
+          "part": "only .1.gz left",
+          "meaning": "After the forced rotation, the old log was renamed and compressed. Add `create 0640 wicky wicky` to make a new empty log at once."
+        }
+      ],
+      "expected_output": "rotating pattern: /home/wicky/bash-practice/day16/logs/todo-api.log  after 1 days (7 rotations)\nconsidering log /home/wicky/bash-practice/day16/logs/todo-api.log\n  log does not need rotating (log has already been rotated)\ntodo-api.log.1.gz",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The debug output contains the current time, so some lines differ on every run.",
+      "verified": true,
+      "mistakes": [
+        "Deleting a log that an app still writes to: the disk space is not freed (Day 17). Use logrotate with `copytruncate` or a reload signal.",
+        "Testing a config with `-f` on a real server: it rotates for real. Use `-d` first."
+      ],
+      "interview_say": "logrotate rotates, compresses and deletes old logs based on a config in `/etc/logrotate.d/`. I test a config with `logrotate -d` first, and use `copytruncate` or a postrotate reload for apps that keep the file open.",
+      "try_yourself": "Look at a real config: `cat /etc/logrotate.d/apt` (read only)."
+    },
+    {
+      "id": "d16p07",
+      "title": "at: run a job once, later (read only)",
+      "type": "concept",
+      "topic": "Services",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team wants to restart the API once tonight at 23:00, not every night. Cron is for repeating jobs; `at` is for one-time jobs. It needs the `atd` service, so it is not run in the sandbox.",
+      "task": [
+        "Install if needed: `sudo apt install -y at`. Start the service on WSL without systemd: `sudo service atd start`.",
+        "Schedule: `echo \"$HOME/bash-practice/day16/report.sh >> $HOME/bash-practice/day16/logs/at.log 2>&1\" | at now + 2 minutes`.",
+        "List jobs with `atq`. Remove a job with `atrm <number>`.",
+        "After 2 minutes, check `logs/at.log`."
+      ],
+      "hints": [
+        "`at TIME` reads commands from stdin.",
+        "Time examples: `now + 10 minutes`, `23:00`, `tomorrow 06:30`.",
+        "`atq` = list, `atrm N` = remove job N."
+      ],
+      "solution": [
+        "echo \"$HOME/bash-practice/day16/report.sh >> $HOME/bash-practice/day16/logs/at.log 2>&1\" | at now + 2 minutes",
+        "atq",
+        "sleep 130",
+        "cat ~/bash-practice/day16/logs/at.log"
+      ],
+      "explanation": [
+        {
+          "part": "at now + 2 minutes",
+          "meaning": "Run the commands from stdin once, in 2 minutes."
+        },
+        {
+          "part": "atq / atrm",
+          "meaning": "List / remove pending jobs."
+        },
+        {
+          "part": "cron vs at",
+          "meaning": "cron = repeat on a schedule. at = run once at a time."
+        }
+      ],
+      "expected_output": "",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "Job numbers and times will be different.",
+      "verified": false,
+      "typical_output": "warning: commands will be executed using /bin/sh\njob 1 at Tue Oct 20 10:32:00 2026\n1\tTue Oct 20 10:32:00 2026 a wicky\nreport ran at 2026-10-20_10:32:00",
+      "mistakes": [
+        "The atd service is not running: the job stays in `atq` and never runs. Check with `sudo service atd status`."
+      ],
+      "interview_say": "For a one-time job I use `at`, for example `echo 'systemctl restart app' | at 23:00`, and I check pending jobs with `atq`. For repeating jobs I use cron or systemd timers.",
+      "try_yourself": "Find out what a systemd timer is (`systemctl list-timers` on a system with systemd). How is it different from cron?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "Explain the five fields of a crontab line.",
+      "a": "Minute, hour, day of month, month, day of week, then the command. `30 2 * * *` runs every day at 02:30.",
+      "topic": "Services"
+    },
+    {
+      "q": "A script works by hand but not in cron. Why?",
+      "a": "Cron has a minimal environment: a small PATH, no `.bashrc`, a different working folder, and no terminal. Use absolute paths, set PATH, and log the output.",
+      "topic": "Services"
+    },
+    {
+      "q": "What are the main parts of a systemd unit file?",
+      "a": "`[Unit]` (Description, After), `[Service]` (ExecStart, User, Restart, Environment), and `[Install]` (WantedBy=multi-user.target).",
+      "topic": "Services"
+    },
+    {
+      "q": "How do you see the logs of a systemd service?",
+      "a": "`journalctl -u service-name`. Add `-f` to follow, `--since \"1 hour ago\"` to filter, `-n 100` for the last lines.",
+      "topic": "Services"
+    },
+    {
+      "q": "What is logrotate for?",
+      "a": "It rotates logs: renames old files, compresses them, and deletes the oldest, so logs do not fill the disk.",
+      "topic": "Services"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "crontab -l / -e",
+      "meaning": "List / edit your cron jobs",
+      "example": "crontab -l",
+      "topic": "Services"
+    },
+    {
+      "cmd": "(crontab -l; cat f) | crontab -",
+      "meaning": "Add lines without losing old ones",
+      "example": "(crontab -l; echo \"@reboot ~/start.sh\") | crontab -",
+      "topic": "Services"
+    },
+    {
+      "cmd": "m h dom mon dow cmd",
+      "meaning": "Crontab line format",
+      "example": "*/5 * * * * /opt/check.sh >> /var/log/check.log 2>&1",
+      "topic": "Services"
+    },
+    {
+      "cmd": "env -i",
+      "meaning": "Run with an empty environment (test cron-like runs)",
+      "example": "env -i PATH=/usr/bin:/bin ./job.sh",
+      "topic": "Services"
+    },
+    {
+      "cmd": "systemd-analyze verify",
+      "meaning": "Check a unit file offline",
+      "example": "systemd-analyze verify ./app.service",
+      "topic": "Services"
+    },
+    {
+      "cmd": "systemctl daemon-reload",
+      "meaning": "Reload unit files after a change",
+      "example": "sudo systemctl daemon-reload",
+      "topic": "Services"
+    },
+    {
+      "cmd": "systemctl enable --now",
+      "meaning": "Start now and at boot",
+      "example": "sudo systemctl enable --now todo-api",
+      "topic": "Services"
+    },
+    {
+      "cmd": "systemctl status / restart / stop",
+      "meaning": "Check and control a service",
+      "example": "systemctl status nginx",
+      "topic": "Services"
+    },
+    {
+      "cmd": "journalctl -u NAME -f --since",
+      "meaning": "Logs of a unit",
+      "example": "journalctl -u nginx --since \"1 hour ago\"",
+      "topic": "Services"
+    },
+    {
+      "cmd": "logrotate -d",
+      "meaning": "Dry-run a logrotate config",
+      "example": "logrotate -d /etc/logrotate.d/nginx",
+      "topic": "Services"
+    },
+    {
+      "cmd": "at / atq / atrm",
+      "meaning": "One-time jobs",
+      "example": "echo ./report.sh | at 23:00",
+      "topic": "Services"
+    },
+    {
+      "cmd": "ps -p 1 -o comm=",
+      "meaning": "Is systemd PID 1?",
+      "example": "ps -p 1 -o comm=",
+      "topic": "Services"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "crontab syntax",
+      "problems": [
+        "d16p01",
+        "d16p02"
+      ]
+    },
+    {
+      "item": "at",
+      "problems": [
+        "d16p07"
+      ]
+    },
+    {
+      "item": "systemd unit file",
+      "problems": [
+        "d16p03",
+        "d16p05"
+      ]
+    },
+    {
+      "item": "systemctl status/start/enable",
+      "problems": [
+        "d16p04"
+      ]
+    },
+    {
+      "item": "journalctl -u -f --since",
+      "problems": [
+        "d16p04"
+      ]
+    },
+    {
+      "item": "logrotate idea",
+      "problems": [
+        "d16p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day16"
+}

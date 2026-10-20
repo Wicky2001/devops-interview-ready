@@ -1,0 +1,897 @@
+{
+  "day": 15,
+  "week": 3,
+  "title": "Processes and signals",
+  "goal": "Find, inspect and stop processes the right way, run jobs in the background, and let scripts shut down cleanly on signals.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day15 && cd ~/bash-practice/day15",
+    "# P1: a CPU hog and a process that ignores SIGTERM",
+    "printf '%s\\n' '#!/bin/bash' '# a runaway loop that uses 100% of one CPU' 'while :; do :; done' > runaway.sh",
+    "printf '%s\\n' '#!/bin/bash' 'trap '\"'\"'echo \"stubborn: I ignore TERM\"'\"'\"' TERM' 'while :; do sleep 0.2; done' > stubborn.sh",
+    "# P2: a ps aux snapshot sent by the on-call engineer",
+    "printf '%s\\n' \\",
+    "'USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND' \\",
+    "'root           1  0.0  0.1 167520 11864 ?        Ss   08:00   0:02 /sbin/init' \\",
+    "'root         612  0.1  0.3 1462324 28100 ?       Ssl  08:00   0:40 /usr/bin/containerd' \\",
+    "'root         890  0.0  0.0  55224  1580 ?        Ss   08:00   0:00 nginx: master process /usr/sbin/nginx' \\",
+    "'www-data     891  0.2  0.1  55900  6020 ?        S    08:00   0:15 nginx: worker process' \\",
+    "'jenkins     1204 97.5 21.4 5123456 3500120 ?     Sl   08:01 312:44 java -jar /usr/share/java/jenkins.war' \\",
+    "'wicky       2210  1.2 35.8 9876543 5862000 ?     Rl   09:15  40:02 python3 train.py --epochs 50' \\",
+    "'wicky       2299  0.0  0.0      0     0 ?        Z    09:20   0:00 [python3] <defunct>' \\",
+    "'postgres    1501  3.4  4.2 225000 690000 ?       Ss   08:00  10:11 postgres: main' \\",
+    "'wicky       3001  0.0  0.0  10072  3400 pts/0    Ss   10:00   0:00 -bash' \\",
+    "'wicky       3050  0.0  0.0  11200  3600 pts/0    R+   10:05   0:00 ps aux' > ps-snapshot.txt",
+    "# P4: a worker that shuts down cleanly on TERM or INT",
+    "printf '%s\\n' '#!/bin/bash' 'touch worker.lock' 'cleanup() { echo \"worker: got a stop signal, saving state\"; rm -f worker.lock; exit 0; }' 'trap cleanup TERM INT' 'while :; do sleep 0.2; done' > worker.sh",
+    "# P5: a background service and a broken stop script",
+    "printf '%s\\n' '#!/bin/bash' 'trap '\"'\"'echo \"todo-worker: cleaning up\"; exit 0'\"'\"' TERM' 'echo $$ > todo-worker.pid' 'while :; do sleep 0.2; done' > todo-worker.sh",
+    "printf '%s\\n' '#!/bin/bash' '# Stop todo-worker gracefully: send TERM, wait up to 5 seconds,' '# and use KILL only if it is still running. Then remove the pid file.' 'PID=$(ps aux | grep todo-worker | awk '\"'\"'{print $2}'\"'\"')' 'kill -9 $PID' 'rm todo-worker.pid' 'echo \"worker stopped\"' > stop-worker.sh",
+    "cd ~/bash-practice/day15"
+  ],
+  "warmup": [
+    {
+      "q": "Which command shows the 10 biggest numbers of a column, biggest first?",
+      "a": "`sort -rn | head -n 10` (for example after `uniq -c`).",
+      "from_day": 14
+    },
+    {
+      "q": "How do you get the file name from a path in bash?",
+      "a": "`${path##*/}` (or `basename \"$path\"`).",
+      "from_day": 13
+    },
+    {
+      "q": "What does `trap 'cmd' EXIT` do?",
+      "a": "It runs `cmd` when the script ends, also after an error. Good for cleanup.",
+      "from_day": 13
+    },
+    {
+      "q": "What does exit code 130 mean?",
+      "a": "The program was stopped with Ctrl+C (signal 2, SIGINT). 128 + 2 = 130.",
+      "from_day": 6
+    }
+  ],
+  "problems": [
+    {
+      "id": "d15p01",
+      "title": "Stop a runaway process: kill vs kill -9",
+      "type": "command",
+      "topic": "Processes",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The model training server is slow. A forgotten loop uses 100% of a CPU. Another process ignores the normal stop signal. The user must find each one by name and stop it, first politely (SIGTERM), then by force (SIGKILL) only if needed.",
+      "task": [
+        "Start the problem: `bash runaway.sh &`. Check it runs with `pgrep -f runaway.sh`.",
+        "Look at it with `ps -o pid,stat,%cpu,cmd -p <PID>`.",
+        "Stop it with `kill <PID>` (SIGTERM). Check it is gone.",
+        "Start `bash stubborn.sh &`. Try `pkill -f stubborn.sh`. Is it still running?",
+        "Stop it with `pkill -9 -f stubborn.sh` (SIGKILL)."
+      ],
+      "hints": [
+        "`pgrep -f NAME` prints the PIDs of processes whose command line contains NAME.",
+        "`kill PID` sends SIGTERM (15): the program can clean up. `kill -9 PID` sends SIGKILL: no cleanup, cannot be blocked.",
+        "`pkill -f NAME` = pgrep + kill in one command."
+      ],
+      "solution": [
+        "bash runaway.sh &                       # in your terminal it runs until you stop it",
+        "sleep 1",
+        "PID=$(pgrep -f runaway.sh)",
+        "[ -n \"$PID\" ] && echo \"runaway.sh is running\"",
+        "ps -o stat=,cmd= -p \"$PID\"",
+        "kill \"$PID\"                             # SIGTERM (15): please stop",
+        "sleep 0.5",
+        "pgrep -f runaway.sh > /dev/null || echo \"runaway.sh stopped by SIGTERM\"",
+        "bash stubborn.sh &",
+        "sleep 0.5",
+        "pkill -f stubborn.sh                    # SIGTERM: this one catches it",
+        "sleep 0.5",
+        "pgrep -f stubborn.sh > /dev/null && echo \"stubborn.sh is still running\"",
+        "pkill -9 -f stubborn.sh                 # SIGKILL (9): cannot be caught",
+        "sleep 0.5",
+        "pgrep -f stubborn.sh > /dev/null || echo \"stubborn.sh stopped by SIGKILL\""
+      ],
+      "explanation": [
+        {
+          "part": "cmd &",
+          "meaning": "Run in the background; the terminal is free again."
+        },
+        {
+          "part": "pgrep -f",
+          "meaning": "Find PIDs by the full command line (`-f`)."
+        },
+        {
+          "part": "ps -o stat=,cmd= -p PID",
+          "meaning": "Show chosen columns for one process. `R` = running on the CPU."
+        },
+        {
+          "part": "kill PID",
+          "meaning": "Send SIGTERM. Well-behaved programs save data and exit."
+        },
+        {
+          "part": "trap ... TERM",
+          "meaning": "`stubborn.sh` catches SIGTERM and keeps running."
+        },
+        {
+          "part": "kill -9 / pkill -9",
+          "meaning": "SIGKILL: the kernel stops the process at once. No cleanup, so use it last."
+        }
+      ],
+      "expected_output": "runaway.sh is running\nR    bash runaway.sh\nrunaway.sh stopped by SIGTERM\nstubborn: I ignore TERM\nstubborn.sh is still running\nbash: 27715 Killed                  bash stubborn.sh\nstubborn.sh stopped by SIGKILL",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The `Killed` line contains a process ID, which is different every run. In an interactive terminal, bash prints job lines like `[1]+  Terminated  bash runaway.sh` instead.",
+      "verified": true,
+      "mistakes": [
+        "Using `kill -9` first: the database or app gets no chance to save, and files can be broken.",
+        "`kill runaway.sh` with a name: `bash: kill: runaway.sh: arguments must be process or job IDs`. Use a PID or `pkill`.",
+        "`pkill python` without `-f` and an exact pattern can stop the wrong Python program."
+      ],
+      "checks": [
+        {
+          "run": "kill runaway.sh",
+          "expect": "kill: runaway.sh: arguments must be process or job IDs"
+        }
+      ],
+      "interview_say": "I find the process with `pgrep -f` or `ps`, send SIGTERM with `kill PID` so it can clean up, wait a few seconds, and only use `kill -9` if it is still running.",
+      "try_yourself": "Run `kill -l` to see all signal names and numbers. Which number is SIGHUP? What do daemons often do on SIGHUP?",
+      "table": {
+        "head": [
+          "",
+          "`kill PID` (SIGTERM, 15)",
+          "`kill -9 PID` (SIGKILL, 9)"
+        ],
+        "rows": [
+          [
+            "Can the program react?",
+            "yes: save, close, clean up",
+            "no"
+          ],
+          [
+            "Can it be ignored?",
+            "yes",
+            "never"
+          ],
+          [
+            "Use",
+            "always first",
+            "only if TERM did not work"
+          ],
+          [
+            "Risk",
+            "low",
+            "half-written files, stale lock files"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d15p02",
+      "title": "Read a ps aux snapshot",
+      "type": "concept",
+      "topic": "Processes",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The on-call engineer sends `ps-snapshot.txt` from a slow server and asks: \"Who uses the CPU and memory? Is anything broken?\" The user reads the columns and answers with awk and sort.",
+      "task": [
+        "Show the header line of the snapshot. Learn the columns.",
+        "Show the 3 processes with the highest %CPU (column 3).",
+        "Show the 2 processes with the highest %MEM (column 4).",
+        "Find zombie processes: STAT (column 8) starts with `Z`.",
+        "Count the processes per user."
+      ],
+      "hints": [
+        "`ps aux`: a = processes of all users, u = user-oriented columns, x = also processes without a terminal.",
+        "`sort -k3 -rn` sorts by column 3 as numbers, biggest first. Skip the header with `tail -n +2`.",
+        "`awk '$8 ~ /^Z/'` prints lines whose 8th field starts with Z."
+      ],
+      "solution": [
+        "head -n 1 ps-snapshot.txt",
+        "echo \"=== top 3 CPU ===\"",
+        "tail -n +2 ps-snapshot.txt | sort -k3 -rn | head -n 3 | awk '{print $3 \"%\", $1, $11, $12}'",
+        "echo \"=== top 2 memory ===\"",
+        "tail -n +2 ps-snapshot.txt | sort -k4 -rn | head -n 2 | awk '{print $4 \"%\", $1, $11, $12}'",
+        "echo \"=== zombies ===\"",
+        "awk 'NR > 1 && $8 ~ /^Z/ {print $2, $11, $12}' ps-snapshot.txt",
+        "echo \"=== processes per user ===\"",
+        "awk 'NR > 1 {print $1}' ps-snapshot.txt | sort | uniq -c | sort -rn"
+      ],
+      "explanation": [
+        {
+          "part": "a u x",
+          "meaning": "a = all users, u = user format (USER, %CPU, %MEM ...), x = include processes without a terminal (daemons). No dash: BSD style."
+        },
+        {
+          "part": "%CPU / %MEM",
+          "meaning": "Share of one CPU (can be over 100 on many cores in `top`) / share of RAM."
+        },
+        {
+          "part": "VSZ / RSS",
+          "meaning": "Virtual memory size / Resident Set Size: real RAM used, in KB."
+        },
+        {
+          "part": "STAT",
+          "meaning": "R running, S sleeping, D waiting for disk (cannot be killed), Z zombie, T stopped. `s` session leader, `l` threads, `+` foreground."
+        },
+        {
+          "part": "TTY ?",
+          "meaning": "No terminal: a daemon or service."
+        },
+        {
+          "part": "$8 ~ /^Z/",
+          "meaning": "awk regex match on field 8."
+        }
+      ],
+      "expected_output": "USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n=== top 3 CPU ===\n97.5% jenkins java -jar\n3.4% postgres postgres: main\n1.2% wicky python3 train.py\n=== top 2 memory ===\n35.8% wicky python3 train.py\n21.4% jenkins java -jar\n=== zombies ===\n2299 [python3] <defunct>\n=== processes per user ===\n      4 wicky\n      3 root\n      1 www-data\n      1 postgres\n      1 jenkins",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Thinking `ps` and `ps aux` are the same: `ps` alone shows only the current terminal's processes.",
+        "Trying to `kill -9` a zombie. It is already dead; its parent must collect it (or the parent must be restarted).",
+        "Reading `x` in `ps aux` as \"exclude\". It means: also show processes without a terminal."
+      ],
+      "interview_say": "In `ps aux`, `a` is all users, `u` is the user-oriented format, and `x` adds processes without a terminal. I sort by %CPU or %MEM to find the heavy process, and STAT `Z` shows zombies.",
+      "try_yourself": "Run real `ps aux --sort=-%mem | head -n 5` on your WSL. Which process uses the most memory?",
+      "table": {
+        "head": [
+          "Command",
+          "Shows"
+        ],
+        "rows": [
+          [
+            "`ps`",
+            "only processes of this terminal"
+          ],
+          [
+            "`ps aux`",
+            "all processes, BSD format"
+          ],
+          [
+            "`ps -ef`",
+            "all processes, full format with PPID (parent)"
+          ],
+          [
+            "`ps -eo pid,ppid,%cpu,cmd --sort=-%cpu`",
+            "chosen columns, sorted"
+          ],
+          [
+            "`top` / `htop`",
+            "live view; press `P` (CPU), `M` (memory), `q` quit"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d15p03",
+      "title": "Background jobs: &, jobs, wait, nohup",
+      "type": "command",
+      "topic": "Processes",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A data export takes a long time. The user wants to start two exports at once, wait for both, and start a report that keeps running even if the SSH connection closes.",
+      "task": [
+        "Start `sleep 3 &` and `sleep 2 &`. List them with `jobs`.",
+        "Wait for both with `wait`, then print `all jobs finished`.",
+        "Start a report with `nohup` and send all output to `report.log`. Wait for it with `wait $!`.",
+        "Show `report.log`.",
+        "In your terminal only: run `sleep 60`, press `Ctrl+Z`, then `bg`, `jobs`, `fg`, and `Ctrl+C`."
+      ],
+      "hints": [
+        "`&` = background. `jobs` lists background jobs of this shell. `$!` = PID of the last background job.",
+        "`wait` with no argument waits for all background jobs.",
+        "`nohup cmd > file 2>&1 &` keeps running after logout. `Ctrl+Z` pauses a job; `bg` continues it in the background; `fg` brings it to the front."
+      ],
+      "solution": [
+        "sleep 3 &",
+        "sleep 2 &",
+        "jobs",
+        "wait",
+        "echo \"all jobs finished\"",
+        "nohup bash -c 'echo \"report started\"; sleep 1; echo \"report done\"' > report.log 2>&1 &",
+        "wait $!",
+        "echo \"exit code of the report: $?\"",
+        "cat report.log"
+      ],
+      "explanation": [
+        {
+          "part": "jobs",
+          "meaning": "Background jobs of this shell: `[1]-` and `[2]+` (`+` = current job, `-` = previous)."
+        },
+        {
+          "part": "wait / wait $!",
+          "meaning": "Block until all jobs / one job ends. `$?` is then its exit code."
+        },
+        {
+          "part": "nohup",
+          "meaning": "No hang-up: ignore SIGHUP, so the job survives when the terminal or SSH closes."
+        },
+        {
+          "part": "nohup: ignoring input",
+          "meaning": "In the user's own terminal, `report.log` starts with this line: nohup closed the keyboard input. It is a note, not an error. (In a script, background jobs get no keyboard input, so the line is missing here.)"
+        },
+        {
+          "part": "Ctrl+Z, bg, fg",
+          "meaning": "Pause (SIGTSTP), continue in background, bring to foreground. Interactive terminals only."
+        }
+      ],
+      "expected_output": "[1]-  Running                 sleep 3 &\n[2]+  Running                 sleep 2 &\nall jobs finished\nexit code of the report: 0\nreport started\nreport done",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Starting a long job over SSH without `nohup`, `tmux` or `screen`: when Wi-Fi drops, the job dies.",
+        "`nohup cmd &` without a redirect writes to `nohup.out` in the current folder, which can grow very large.",
+        "`fg` in a script: `fg: no job control`. Job control works in an interactive terminal."
+      ],
+      "checks": [
+        {
+          "run": "fg",
+          "expect": "fg: no job control"
+        }
+      ],
+      "interview_say": "I start long jobs with `nohup cmd > log 2>&1 &` or inside `tmux`, so they survive a lost SSH connection. In scripts I start parallel work with `&` and collect it with `wait`.",
+      "try_yourself": "Start `sleep 100 &` and then close the terminal. Open a new one and run `pgrep -a sleep`. Is it still there? Now try the same with `nohup`."
+    },
+    {
+      "id": "d15p04",
+      "title": "trap: let a worker shut down cleanly",
+      "type": "script",
+      "topic": "Processes",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Kubernetes stops a pod by sending SIGTERM, then SIGKILL after 30 seconds. The worker in the backend pod must catch SIGTERM, remove its lock file and exit. The user tests what happens with TERM and with KILL.",
+      "task": [
+        "Read `worker.sh`. Find the `trap` line.",
+        "Start it in the background. After half a second, check that `worker.lock` exists.",
+        "Send SIGTERM with `kill -TERM $!`, then `wait`. Print the exit code. Is the lock file gone?",
+        "Start it again and stop it with `kill -9`. Is the lock file gone this time?"
+      ],
+      "hints": [
+        "`trap cleanup TERM INT` runs the function `cleanup` when SIGTERM or SIGINT arrives.",
+        "SIGKILL cannot be trapped, so no cleanup runs.",
+        "After SIGKILL, `wait` gives 137 (128 + 9)."
+      ],
+      "solution": [
+        "bash worker.sh &",
+        "sleep 0.5",
+        "ls worker.lock",
+        "kill -TERM $!",
+        "wait $!",
+        "echo \"exit code after TERM: $?\"",
+        "ls worker.lock 2>/dev/null || echo \"lock file removed\"",
+        "bash worker.sh &",
+        "sleep 0.5",
+        "kill -9 $!",
+        "wait $! 2>/dev/null",
+        "echo \"exit code after KILL: $?\"",
+        "ls worker.lock && echo \"lock file left behind: no cleanup after SIGKILL\"",
+        "rm -f worker.lock"
+      ],
+      "explanation": [
+        {
+          "part": "trap cleanup TERM INT",
+          "meaning": "Call `cleanup` on SIGTERM (kill, Kubernetes, systemd stop) and SIGINT (Ctrl+C)."
+        },
+        {
+          "part": "cleanup() { ...; exit 0; }",
+          "meaning": "Save state, remove the lock, and exit on purpose."
+        },
+        {
+          "part": "wait $!; echo $?",
+          "meaning": "Exit code of the worker: 0 after a clean stop."
+        },
+        {
+          "part": "137",
+          "meaning": "128 + 9: killed by signal 9. Kubernetes shows this as `OOMKilled` or `Error 137`."
+        },
+        {
+          "part": "2>/dev/null after wait",
+          "meaning": "Hide the shell's `Killed` job message."
+        }
+      ],
+      "expected_output": "worker.lock\nworker: got a stop signal, saving state\nexit code after TERM: 0\nlock file removed\nexit code after KILL: 137\nworker.lock\nlock file left behind: no cleanup after SIGKILL",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`trap cleanup KILL`: bash accepts it silently, but SIGKILL can never be caught.",
+        "A long `sleep 300` in the loop: bash runs the trap only after `sleep` ends, so shutdown is slow. Use short sleeps or `sleep 300 & wait $!`."
+      ],
+      "interview_say": "Kubernetes and systemd stop a process with SIGTERM first. My scripts use `trap cleanup TERM INT` to finish cleanly. SIGKILL cannot be caught, so cleanup must not depend on it.",
+      "try_yourself": "Run `bash worker.sh` in the foreground and press Ctrl+C. Which message do you see? Check `echo $?`."
+    },
+    {
+      "id": "d15p05",
+      "title": "Find the bug: the stop script",
+      "type": "fix-bug",
+      "topic": "Processes",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`stop-worker.sh` should stop `todo-worker` gracefully. It prints an error about a missing process, the worker never prints its cleanup message, and the second run fails on the pid file.",
+      "task": [
+        "Start the worker: `bash todo-worker.sh &`. Then run `bash stop-worker.sh`. Read the output.",
+        "Run `ps aux | grep todo-worker` yourself. Why are there extra lines?",
+        "Find 3 bugs: how the PID is found, `kill -9` first, and the `rm`.",
+        "Fix the script: read the PID from `todo-worker.pid`, send TERM, wait up to 5 seconds, KILL only if needed, `rm -f`.",
+        "Start the worker again and run the fixed script."
+      ],
+      "hints": [
+        "`ps aux | grep todo-worker` also finds the grep command itself, and the stop script's own command line.",
+        "Loop: `for i in 1 2 3 4 5; do kill -0 \"$PID\" 2>/dev/null || break; sleep 1; done`.",
+        "`kill -0 PID` sends no signal; it only checks that the process exists."
+      ],
+      "solution": [
+        "bash todo-worker.sh &",
+        "sleep 0.5",
+        "bash stop-worker.sh",
+        "cat > stop-worker.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Stop todo-worker gracefully: send TERM, wait up to 5 seconds,",
+        "# and use KILL only if it is still running. Then remove the pid file.",
+        "PIDFILE=todo-worker.pid",
+        "[ -f \"$PIDFILE\" ] || { echo \"no pid file, worker not running?\" >&2; exit 1; }",
+        "PID=$(cat \"$PIDFILE\")",
+        "kill -TERM \"$PID\" 2>/dev/null",
+        "for i in 1 2 3 4 5; do",
+        "  kill -0 \"$PID\" 2>/dev/null || break   # gone? stop waiting",
+        "  sleep 1",
+        "done",
+        "if kill -0 \"$PID\" 2>/dev/null; then",
+        "  echo \"still running after 5 s, sending KILL\"",
+        "  kill -KILL \"$PID\"",
+        "fi",
+        "rm -f \"$PIDFILE\"",
+        "echo \"worker stopped\"",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "bash todo-worker.sh &",
+        "sleep 0.5",
+        "bash stop-worker.sh",
+        "bash stop-worker.sh; echo \"second run exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "ps aux | grep",
+          "meaning": "Bug 1: grep finds its own process too, so PID had several numbers; one was already gone: `No such process`."
+        },
+        {
+          "part": "kill -9 first",
+          "meaning": "Bug 2: no TERM, so the worker had no chance to clean up."
+        },
+        {
+          "part": "rm → rm -f",
+          "meaning": "Bug 3: `rm` failed when the pid file was missing. `-f` is quiet if it is gone."
+        },
+        {
+          "part": "kill -0 PID",
+          "meaning": "Check if the process still exists, without sending a signal."
+        },
+        {
+          "part": "pid file",
+          "meaning": "A file with the PID, written by the service at start. Reliable, no grep needed."
+        }
+      ],
+      "expected_output": "stop-worker.sh: line 5: kill: (27792) - No such process\nworker stopped\nbash: 27783 Killed                  bash todo-worker.sh\n--- fixed ---\ntodo-worker: cleaning up\nworker stopped\nno pid file, worker not running?\nsecond run exit code: 1",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The process IDs in the broken run are different every time.",
+      "verified": true,
+      "mistakes": [
+        "Using `ps aux | grep todo-worker | grep -v grep`: it still matches other commands, like `nano todo-worker.sh`. A pid file or `pgrep -f` is better.",
+        "Using `sleep 5` once instead of a loop: the script always waits 5 seconds, even when the worker stopped after 0.2 seconds."
+      ],
+      "interview_say": "A good stop script reads the PID from a pid file, sends SIGTERM, waits with a `kill -0` loop, and uses SIGKILL only as the last step. `ps | grep` is unreliable because grep matches itself.",
+      "try_yourself": "Use `pgrep -f '^bash todo-worker.sh'` instead of the pid file. What does the `^` change?"
+    },
+    {
+      "id": "d15p06",
+      "title": "nice: run a heavy job with low priority",
+      "type": "command",
+      "topic": "Processes",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A nightly backup compresses big files and slows down the API. The user runs it with a lower CPU priority so the API keeps its speed. Niceness goes from -20 (highest priority) to 19 (lowest).",
+      "task": [
+        "Print the normal niceness of your shell: `nice`.",
+        "Start `sleep 30` with `nice -n 10` in the background and show its NI column with `ps -o ni=,cmd= -p $!`.",
+        "Make it even lower with `renice -n 15 -p $!`.",
+        "Try to raise it back to 0 with `renice -n 0 -p $!`. Read the error. Stop the sleep."
+      ],
+      "hints": [
+        "Higher nice number = nicer to others = lower priority.",
+        "A normal user can only make a process nicer (higher number). Lowering it needs sudo.",
+        "`kill $!` stops the background sleep at the end."
+      ],
+      "solution": [
+        "nice",
+        "nice -n 10 sleep 30 &",
+        "ps -o ni=,cmd= -p $!",
+        "renice -n 15 -p $! > /dev/null",
+        "ps -o ni=,cmd= -p $!",
+        "renice -n 0 -p $! || echo \"exit code: $?\"",
+        "kill $!"
+      ],
+      "explanation": [
+        {
+          "part": "nice",
+          "meaning": "Without a command: print the current niceness (usually 0)."
+        },
+        {
+          "part": "nice -n 10 cmd",
+          "meaning": "Start a command with niceness 10."
+        },
+        {
+          "part": "renice -n 15 -p PID",
+          "meaning": "Change the niceness of a running process."
+        },
+        {
+          "part": "Permission denied",
+          "meaning": "Normal users cannot raise priority (lower the number). Root can: `sudo renice -n -5 -p PID`."
+        }
+      ],
+      "expected_output": "0\n 10 sleep 30\n 15 sleep 30\nrenice: failed to set priority for 27810 (process ID): Permission denied\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The error line contains the process ID, which is different every run.",
+      "verified": true,
+      "mistakes": [
+        "Thinking nice limits memory or disk. It only changes CPU priority. For disk use `ionice -c3`."
+      ],
+      "interview_say": "I run heavy batch jobs with `nice -n 10` (and `ionice -c3` for disk), so production services keep CPU priority. Only root can give a process a higher priority.",
+      "try_yourself": "Run `top`, press `r` and change the nice value of a process from inside top."
+    },
+    {
+      "id": "d15p07",
+      "title": "/proc/PID: what is this process doing?",
+      "type": "command",
+      "topic": "Processes",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A Python process on the training server writes to an unknown file and uses a strange setting. `/proc/<pid>/` shows the command line, the environment, the open files and the working folder of any process the user owns.",
+      "task": [
+        "Start `cd /tmp && FOO=bar sleep 30 &` in a subshell so it runs in `/tmp` with a variable.",
+        "Read its command line from `/proc/PID/cmdline` (words are separated by null bytes).",
+        "Find `FOO` in `/proc/PID/environ`.",
+        "Show its working folder with `readlink /proc/PID/cwd`, and its state from `/proc/PID/status`."
+      ],
+      "hints": [
+        "Convert null bytes to spaces or new lines: `tr '\\0' ' ' < /proc/PID/cmdline`.",
+        "`environ` is also null-separated: `tr '\\0' '\\n' < /proc/PID/environ | grep FOO`.",
+        "`cwd` and `exe` are symlinks; `fd/` has one link per open file."
+      ],
+      "solution": [
+        "(cd /tmp && FOO=bar exec sleep 30) &",
+        "PID=$!",
+        "sleep 0.3",
+        "echo \"cmdline: $(tr '\\0' ' ' < /proc/$PID/cmdline)\"",
+        "tr '\\0' '\\n' < /proc/$PID/environ | grep '^FOO='",
+        "echo \"cwd: $(readlink /proc/$PID/cwd)\"",
+        "grep -E '^(Name|State):' /proc/$PID/status",
+        "kill $PID"
+      ],
+      "explanation": [
+        {
+          "part": "/proc/PID/cmdline",
+          "meaning": "The full command line, with null bytes between words."
+        },
+        {
+          "part": "/proc/PID/environ",
+          "meaning": "The environment variables the process started with."
+        },
+        {
+          "part": "/proc/PID/cwd",
+          "meaning": "Symlink to the current working folder of the process."
+        },
+        {
+          "part": "/proc/PID/status",
+          "meaning": "Name, State (S sleeping, R running ...), memory, threads."
+        },
+        {
+          "part": "exec sleep",
+          "meaning": "Replace the subshell with `sleep`, so `$!` is the PID of sleep itself."
+        }
+      ],
+      "expected_output": "cmdline: sleep 30\nFOO=bar\ncwd: /tmp\nName:\tsleep\nState:\tS (sleeping)",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Reading `/proc/1/environ` as a normal user: `Permission denied`. A user can only read the environ of their own processes.",
+        "Secrets passed as environment variables can be read here by the same user or root. Prefer files with 600 permissions or a secret manager."
+      ],
+      "checks": [
+        {
+          "run": "cat /proc/1/environ",
+          "expect": "Permission denied"
+        }
+      ],
+      "interview_say": "`/proc/PID` shows live details of a process: `cmdline`, `environ`, `cwd`, `fd` for open files and `status`. It helps when I need to know exactly how a process was started.",
+      "try_yourself": "Run `ls -l /proc/$$/fd` for your own shell. What are 0, 1 and 2?"
+    },
+    {
+      "id": "d15p08",
+      "title": "Zombie vs orphan",
+      "type": "concept",
+      "topic": "Processes",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The ps snapshot showed `[python3] <defunct>` with STAT `Z`. The user creates a zombie on purpose to see it, and learns the difference from an orphan process.",
+      "task": [
+        "Run the small Python program in the solution: the child exits at once, the parent sleeps and does not collect it.",
+        "While the parent sleeps, show the child with `ps -o stat=,cmd= --ppid <parent PID>`.",
+        "After the parent ends, check again: the zombie is gone.",
+        "Read the table: zombie vs orphan."
+      ],
+      "hints": [
+        "A zombie has finished, but its parent has not read its exit code yet (no `wait()`).",
+        "An orphan is still running, but its parent has died. PID 1 (or a subreaper) adopts it.",
+        "Zombies use no CPU or memory, only a slot in the process table."
+      ],
+      "solution": [
+        "python3 -c '",
+        "import os, time",
+        "pid = os.fork()",
+        "if pid == 0:",
+        "    os._exit(0)      # the child ends at once",
+        "time.sleep(1.5)      # the parent never calls wait()",
+        "' &",
+        "PARENT=$!",
+        "sleep 0.7",
+        "ps -o stat=,cmd= --ppid \"$PARENT\"",
+        "wait \"$PARENT\"",
+        "ps -o stat=,cmd= --ppid \"$PARENT\" || echo \"parent ended: the zombie was cleaned up\""
+      ],
+      "explanation": [
+        {
+          "part": "os.fork()",
+          "meaning": "Create a child process."
+        },
+        {
+          "part": "os._exit(0) in the child",
+          "meaning": "The child ends at once."
+        },
+        {
+          "part": "no wait() in the parent",
+          "meaning": "The exit code is never collected, so the child stays a zombie (`Z`, `<defunct>`)."
+        },
+        {
+          "part": "parent ends",
+          "meaning": "PID 1 adopts the zombie and collects it, so it disappears."
+        }
+      ],
+      "expected_output": "Z    [python3] <defunct>\nparent ended: the zombie was cleaned up",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Trying `kill -9` on a zombie: nothing changes. Kill or restart the parent instead.",
+        "Many zombies in a container: the main process (PID 1) does not reap children. Use `docker run --init` or a tiny init like tini."
+      ],
+      "interview_say": "A zombie is a finished process whose parent has not read its exit status; you fix the parent. An orphan is a running process whose parent died; init adopts it.",
+      "try_yourself": "Run `ps -eo stat | grep -c '^Z'` on your WSL to count zombies (probably 0).",
+      "table": {
+        "head": [
+          "",
+          "Zombie",
+          "Orphan"
+        ],
+        "rows": [
+          [
+            "Is it running?",
+            "no, it finished",
+            "yes"
+          ],
+          [
+            "Parent",
+            "alive, but did not call wait()",
+            "dead; adopted by PID 1"
+          ],
+          [
+            "Uses CPU/RAM?",
+            "no, only a process table slot",
+            "yes, like any process"
+          ],
+          [
+            "Fix",
+            "fix or restart the parent",
+            "usually nothing; it is a normal process"
+          ]
+        ]
+      }
+    }
+  ],
+  "interview": [
+    {
+      "q": "What is the difference between `kill` and `kill -9`?",
+      "a": "`kill` sends SIGTERM: the program can clean up and exit. `kill -9` sends SIGKILL: the kernel stops it at once, with no cleanup. Use -9 only if TERM does not work.",
+      "topic": "Processes"
+    },
+    {
+      "q": "What do the letters in `ps aux` mean?",
+      "a": "a = processes of all users, u = user-oriented columns (USER, %CPU, %MEM), x = also processes without a terminal, like daemons.",
+      "topic": "Processes"
+    },
+    {
+      "q": "How do you keep a long command running after you log out of SSH?",
+      "a": "`nohup cmd > out.log 2>&1 &`, or run it inside `tmux` or `screen`, or make it a systemd service.",
+      "topic": "Processes"
+    },
+    {
+      "q": "What is a zombie process?",
+      "a": "A process that has finished, but its parent has not collected its exit status. It uses no CPU; fix or restart the parent.",
+      "topic": "Processes"
+    },
+    {
+      "q": "How does a script clean up when it is stopped?",
+      "a": "With `trap cleanup TERM INT` (and `EXIT`). The function removes temp and lock files. SIGKILL cannot be trapped.",
+      "topic": "Processes"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "ps aux / ps -ef",
+      "meaning": "All processes (BSD / full format with PPID)",
+      "example": "ps aux --sort=-%cpu | head",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "ps -o pid,stat,cmd -p PID",
+      "meaning": "Chosen columns for one process",
+      "example": "ps -o pid,ni,cmd -p 1234",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "pgrep -f / pkill -f",
+      "meaning": "Find / signal processes by command line",
+      "example": "pkill -f stubborn.sh",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "kill PID / kill -9 PID",
+      "meaning": "SIGTERM (clean) / SIGKILL (force)",
+      "example": "kill 1234",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "kill -0 PID",
+      "meaning": "Check that a process exists",
+      "example": "kill -0 \"$PID\" 2>/dev/null && echo up",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "kill -l",
+      "meaning": "List signal names and numbers",
+      "example": "kill -l",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "cmd & / jobs / wait",
+      "meaning": "Background job / list / wait for it",
+      "example": "sleep 5 & wait $!",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "Ctrl+Z, bg, fg",
+      "meaning": "Pause, continue in background, bring to front",
+      "example": "bg %1",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "nohup cmd > log 2>&1 &",
+      "meaning": "Keep running after logout",
+      "example": "nohup ./export.sh > export.log 2>&1 &",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "nice -n / renice",
+      "meaning": "Start with / change CPU priority",
+      "example": "nice -n 10 tar czf backup.tgz data",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "/proc/PID/",
+      "meaning": "cmdline, environ, cwd, fd, status",
+      "example": "readlink /proc/1234/cwd",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "trap cmd TERM INT",
+      "meaning": "React to stop signals",
+      "example": "trap cleanup TERM INT",
+      "topic": "Processes"
+    },
+    {
+      "cmd": "top / htop",
+      "meaning": "Live view (P = sort CPU, M = memory, q = quit)",
+      "example": "top",
+      "topic": "Processes"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "ps",
+      "problems": [
+        "d15p01",
+        "d15p02",
+        "d15p05"
+      ]
+    },
+    {
+      "item": "top/htop reading",
+      "problems": [
+        "d15p02"
+      ]
+    },
+    {
+      "item": "pgrep, pkill",
+      "problems": [
+        "d15p01",
+        "d15p05"
+      ]
+    },
+    {
+      "item": "kill signals",
+      "problems": [
+        "d15p01",
+        "d15p04",
+        "d15p05"
+      ]
+    },
+    {
+      "item": "jobs, bg, fg",
+      "problems": [
+        "d15p03"
+      ]
+    },
+    {
+      "item": "nohup, &, wait",
+      "problems": [
+        "d15p03",
+        "d15p04"
+      ]
+    },
+    {
+      "item": "nice",
+      "problems": [
+        "d15p06"
+      ]
+    },
+    {
+      "item": "/proc/<pid>",
+      "problems": [
+        "d15p07"
+      ]
+    },
+    {
+      "item": "zombie vs orphan",
+      "problems": [
+        "d15p02",
+        "d15p08"
+      ]
+    },
+    {
+      "item": "trap on signals",
+      "problems": [
+        "d15p04",
+        "d15p05"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day15"
+}

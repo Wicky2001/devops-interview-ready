@@ -1,0 +1,658 @@
+{
+  "day": 7,
+  "week": 1,
+  "review_day": true,
+  "title": "Week 1 review and mini mock test",
+  "goal": "Use Days 1-6 together in new situations: a real incident, a bug hunt, a one-liner to script, and one small script that combines everything.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day07 && cd ~/bash-practice/day07",
+    "# P1: an incident: the to-do backend does not start",
+    "mkdir -p incident/releases/v2 incident/logs",
+    "printf '#!/bin/bash\\necho \"todo-backend v2 started\" >> logs/app.log && echo \"started OK\"\\n' > incident/releases/v2/start.sh",
+    "chmod 755 incident/releases/v2/start.sh",
+    "ln -s releases/v3 incident/current",
+    "printf 'DB_PASSWORD=change-me\\n' > incident/.env",
+    "chmod 644 incident/.env",
+    "chmod 555 incident/logs",
+    "# P3: log folder with a space in the name, and a broken rotate script",
+    "mkdir -p \"app logs\"",
+    "touch \"app logs/api.log\" \"app logs/web.log\" \"app logs/worker 2.log\"",
+    "printf '%s\\n' '#!/bin/bash' '# Usage: rotate-logs.sh <log-folder>' '# Move every .log file into <log-folder>/old/ and write a summary to rotate.log' 'DIR=$1' 'if [ -z \"$DIR\" ]; then echo \"usage: rotate-logs.sh <log-folder>\"; exit 0; fi' 'mkdir $DIR/old' 'for f in $DIR/*.log; do' '  mv $f $DIR/old/' 'done' 'echo \"moved $(ls \"$DIR/old\" | wc -l) files\" > rotate.log' > rotate-logs.sh",
+    "# P4: two nginx configs",
+    "printf '%s\\n' 'server {' '    listen 443 ssl;' '    server_name todo.example.com;' '}' > nginx-tls.conf",
+    "printf '%s\\n' 'server {' '    listen 80;' '    server_name todo.example.com;' '}' > nginx-plain.conf",
+    "# P5: one good and one bad release folder",
+    "for r in rel-good rel-bad; do",
+    "  mkdir -p \"$r\"",
+    "  printf '#!/bin/bash\\necho start\\n' > \"$r/start.sh\"",
+    "  printf 'DB_PASSWORD=change-me\\n' > \"$r/.env\"",
+    "done",
+    "echo '3.0.0' > rel-good/VERSION",
+    "chmod 755 rel-good/start.sh; chmod 600 rel-good/.env",
+    ": > rel-bad/VERSION",
+    "chmod 644 rel-bad/start.sh; chmod 664 rel-bad/.env",
+    "# P6: a small access log",
+    "printf '%s\\n' '10.0.0.1 GET /api/todos 200' '10.0.0.2 GET /api/todos 500' '10.0.0.1 POST /api/todos 201' '10.0.0.3 GET /health 200' '10.0.0.2 GET /api/todos 500' '10.0.0.1 GET /api/todos 200' > access.log",
+    "cd ~/bash-practice/day07"
+  ],
+  "warmup": [
+    {
+      "q": "Why does `[ $BRANCH = main ]` fail when BRANCH is empty?",
+      "a": "The empty variable disappears, so `[` gets `= main`: `unary operator expected`. Quote it or use `[[ ]]`.",
+      "from_day": 6
+    },
+    {
+      "q": "What does `> file 2>&1` do?",
+      "a": "Sends stdout to the file, then stderr to the same place. Both end up in the file.",
+      "from_day": 4
+    },
+    {
+      "q": "What does `chmod 640` give to owner, group and others?",
+      "a": "Owner rw- (6), group r-- (4), others --- (0).",
+      "from_day": 3
+    },
+    {
+      "q": "How do you replace an existing symlink `current` in one command?",
+      "a": "`ln -sfn releases/v2 current`",
+      "from_day": 1
+    }
+  ],
+  "problems": [
+    {
+      "id": "d07p01",
+      "title": "Incident: the backend does not start",
+      "type": "incident",
+      "topic": "Troubleshooting",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": "incident",
+      "situation": "Monday morning. The to-do backend does not start after the weekend deploy. Running `./current/start.sh` says `No such file or directory`. The security team also says the password file is too open. Find and fix three problems.",
+      "task": [
+        "In `incident`, run `./current/start.sh`. Read the error. Check the link with `ls -l current` and `ls releases`.",
+        "Point `current` to the release that exists. Run the start script again.",
+        "The script now fails to write its log. Check `ls -ld logs` and fix the folder so the owner can write.",
+        "Run the start script again until it prints `started OK`. Show `logs/app.log`.",
+        "Fix the permission of `.env` so only the owner can read it. Show it with `stat`."
+      ],
+      "hints": [
+        "`current` points to `releases/v3`, but only `v2` exists.",
+        "`ln -sfn releases/v2 current` replaces the link. `logs` is 555: no `w` for anyone.",
+        "`chmod 755 logs` (or `chmod u+w logs`) and `chmod 600 .env`."
+      ],
+      "solution": [
+        "./current/start.sh || echo \"exit code: $?\"",
+        "ls releases",
+        "readlink current                  # points to releases/v3, which does not exist",
+        "ln -sfn releases/v2 current       # problem 1: broken symlink",
+        "./current/start.sh || echo \"exit code: $?\"",
+        "stat -c '%a %n' logs              # 555: nobody can write",
+        "chmod 755 logs                    # problem 2: folder not writable",
+        "./current/start.sh",
+        "cat logs/app.log",
+        "chmod 600 .env                    # problem 3: secret readable by others",
+        "stat -c '%a %n' .env"
+      ],
+      "explanation": [
+        {
+          "part": "No such file or directory",
+          "meaning": "The symlink `current` points to `releases/v3`, which does not exist (a broken link)."
+        },
+        {
+          "part": "ln -sfn releases/v2 current",
+          "meaning": "Replace the link in one step (Day 1)."
+        },
+        {
+          "part": "logs/app.log: Permission denied",
+          "meaning": "The folder `logs` is 555. To create a file inside a folder, the user needs `w` on the folder (Day 3)."
+        },
+        {
+          "part": ">> logs/app.log && echo",
+          "meaning": "The script appends to the log, then prints OK only if that worked (Day 4)."
+        },
+        {
+          "part": "chmod 600 .env",
+          "meaning": "Secrets: only the owner can read and write."
+        }
+      ],
+      "expected_output": "bash: ./current/start.sh: No such file or directory\nexit code: 127\nv2\nreleases/v3\n./current/start.sh: line 2: logs/app.log: Permission denied\nexit code: 1\n555 logs\nstarted OK\ntodo-backend v2 started\n600 .env",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Running `ln -s releases/v2 current` without `-fn`: the old link is not replaced (`ln: failed to create symbolic link 'current': File exists`).",
+        "Fixing with `chmod 777 logs`. It works, but every user can now delete the logs. Use 755.",
+        "Stopping after the first fix. In incidents there is often more than one problem. Run the command again after each fix."
+      ],
+      "checks": [
+        {
+          "run": "ln -s releases/v2 current",
+          "expect": "ln: failed to create symbolic link 'current': File exists"
+        }
+      ],
+      "interview_say": "I read the error, fix one thing, and run again. Here the `current` symlink was broken, the logs folder was not writable, and the `.env` file was too open.",
+      "try_yourself": "Write the three checks as one script that prints OK or FAIL for each (Day 6 file tests: `-e current`, `-w logs`, and the `stat` number for `.env`)."
+    },
+    {
+      "id": "d07p02",
+      "title": "Predict the output: a mixed quiz",
+      "type": "predict",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "This is like a written interview test. Each line mixes quotes, variables, redirects and exit codes. The user writes the answers on paper first, then runs the lines one by one.",
+      "task": [
+        "`N=5; echo \"$N\" '$N' $((N * 2))`",
+        "`echo hello > a.txt; echo world > a.txt; cat a.txt`",
+        "`ls /nope 2> /dev/null; echo \"exit=$?\"`",
+        "`X=1; ( X=2; echo \"in=$X\" ); echo \"out=$X\"`",
+        "`[ -d /tmp ] && echo dir || echo nodir` and `[[ abc == a* ]] && echo match`",
+        "`echo {a,b}-{1,2}`"
+      ],
+      "hints": [
+        "Single quotes stop replacement. `$(( ))` does math.",
+        "`>` overwrites. `2>` sends only errors. `ls` gives exit code 2 for a missing file.",
+        "A subshell `( )` has its own copy of variables. Braces make all combinations."
+      ],
+      "solution": [
+        "N=5; echo \"$N\" '$N' $((N * 2))",
+        "echo hello > a.txt; echo world > a.txt; cat a.txt",
+        "ls /nope 2> /dev/null; echo \"exit=$?\"",
+        "X=1; ( X=2; echo \"in=$X\" ); echo \"out=$X\"",
+        "[ -d /tmp ] && echo dir || echo nodir",
+        "[[ abc == a* ]] && echo match",
+        "echo {a,b}-{1,2}"
+      ],
+      "explanation": [
+        {
+          "part": "\"$N\" '$N' $((N * 2))",
+          "meaning": "5, then the literal text $N, then 10."
+        },
+        {
+          "part": "> twice",
+          "meaning": "The second `>` replaces the first line: only `world` stays."
+        },
+        {
+          "part": "exit=2",
+          "meaning": "The error is hidden, but the exit code is still 2."
+        },
+        {
+          "part": "in=2 / out=1",
+          "meaning": "The subshell change does not come back."
+        },
+        {
+          "part": "{a,b}-{1,2}",
+          "meaning": "Brace expansion makes every combination: a-1 a-2 b-1 b-2."
+        }
+      ],
+      "expected_output": "5 $N 10\nworld\nexit=2\nin=2\nout=1\ndir\nmatch\na-1 a-2 b-1 b-2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Thinking `2> /dev/null` changes the exit code. It only hides the message.",
+        "Expecting `out=2`. Changes inside `( )` are lost when the subshell ends."
+      ],
+      "interview_say": "I can predict this because I know the rules: single quotes are literal, `>` overwrites, `2>` only moves errors, and a subshell has its own copy of variables.",
+      "try_yourself": "Write 3 new quiz lines for a friend, using `>>`, `tee` and `case`. Run them to check your own answers."
+    },
+    {
+      "id": "d07p03",
+      "title": "Find the bug: the log rotate script",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`rotate-logs.sh` moves all `.log` files of a folder into `old/`. It works on the test server, but fails on the real one, where the folder is called `app logs`. It also returns 0 when the user forgets the argument, so Jenkins shows green.",
+      "task": [
+        "Run `bash rotate-logs.sh \"app logs\"`. Read the errors.",
+        "Run `bash rotate-logs.sh; echo $?` with no argument. Is the exit code correct?",
+        "Find 4 bugs: the usage exit code and stream, `mkdir`, and two quoting problems.",
+        "Fix them. Run the fixed script **twice** on `\"app logs\"` (the second run must not fail). Check with `ls -R \"app logs\"` and `cat rotate.log`."
+      ],
+      "hints": [
+        "Usage errors: message to stderr (`>&2`) and `exit 2`.",
+        "`mkdir` without `-p` fails when `old` already exists (second run).",
+        "Quote `\"$DIR\"/old` and `\"$f\"`. Keep the `*.log` outside the quotes so the wildcard still works: `\"$DIR\"/*.log`."
+      ],
+      "solution": [
+        "bash rotate-logs.sh \"app logs\"",
+        "bash rotate-logs.sh; echo \"exit code: $?\"",
+        "rmdir app                          # the broken run made a stray folder \"app\"",
+        "cat > rotate-logs.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: rotate-logs.sh <log-folder>",
+        "# Move every .log file into <log-folder>/old/ and write a summary to rotate.log",
+        "DIR=$1",
+        "if [ -z \"$DIR\" ]; then echo \"usage: rotate-logs.sh <log-folder>\" >&2; exit 2; fi",
+        "mkdir -p \"$DIR/old\"",
+        "for f in \"$DIR\"/*.log; do",
+        "  [ -e \"$f\" ] || continue          # no .log files: the pattern stays as text",
+        "  mv \"$f\" \"$DIR/old/\"",
+        "done",
+        "echo \"moved $(ls \"$DIR/old\" | wc -l) files\" > rotate.log",
+        "EOF",
+        "bash rotate-logs.sh; echo \"exit code: $?\"",
+        "bash rotate-logs.sh \"app logs\" && bash rotate-logs.sh \"app logs\"; echo \"exit code: $?\"",
+        "ls -R \"app logs\"",
+        "cat rotate.log"
+      ],
+      "explanation": [
+        {
+          "part": ">&2; exit 2",
+          "meaning": "Bug 1: usage went to stdout with exit 0. Now it goes to stderr and returns 2 (wrong usage)."
+        },
+        {
+          "part": "mkdir -p \"$DIR/old\"",
+          "meaning": "Bug 2+3: without quotes, `mkdir $DIR/old` became `mkdir app logs/old`. It made a stray folder `app` and failed on `logs/old`. Without `-p` it also fails on the second run."
+        },
+        {
+          "part": "\"$DIR\"/*.log",
+          "meaning": "Quote the variable part only. The `*` must be outside quotes to match files."
+        },
+        {
+          "part": "mv \"$f\"",
+          "meaning": "Bug 4: `worker 2.log` has a space; without quotes `mv` got two names."
+        },
+        {
+          "part": "[ -e \"$f\" ] || continue",
+          "meaning": "If no file matches, the loop gets the text `app logs/*.log`. Skip it."
+        }
+      ],
+      "expected_output": "mkdir: cannot create directory ‘logs/old’: No such file or directory\nmv: target 'logs/old/': No such file or directory\nmv: target 'logs/old/': No such file or directory\nls: cannot access 'app logs/old': No such file or directory\nusage: rotate-logs.sh <log-folder>\nexit code: 0\nusage: rotate-logs.sh <log-folder>\nexit code: 2\nexit code: 0\n'app logs':\nold\n\n'app logs/old':\n api.log   web.log  'worker 2.log'\nmoved 3 files",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Quoting the wildcard too: `\"$DIR/*.log\"` looks for a file really named `*.log`.",
+        "Testing only once. Many scripts break on the second run (not idempotent). Day 22 covers this."
+      ],
+      "interview_say": "I quote every variable, use `mkdir -p` so a script can run twice, and send usage errors to stderr with a non-zero exit code so CI fails correctly.",
+      "try_yourself": "Run `shellcheck rotate-logs.sh` on the old version (copy it from the setup line). How many warnings does it show?"
+    },
+    {
+      "id": "d07p04",
+      "title": "Convert a one-liner into a safe script",
+      "type": "convert",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate checks TLS with this one-liner: `grep -q \"listen 443\" nginx.conf && echo \"TLS on\" || echo \"TLS off\"`. The team wants a script for CI: it takes the file as an argument, checks the file exists, and returns exit code 0 (TLS on), 1 (TLS off) or 2 (bad usage).",
+      "task": [
+        "Create `check-tls.sh`. If no argument is given, print usage to stderr and exit 2.",
+        "If the file does not exist (`-f`), print an error to stderr and exit 2.",
+        "Use `grep -q` in an `if`. Print `TLS on: <file>` and exit 0, or `TLS off: <file>` and exit 1.",
+        "Test with `nginx-tls.conf`, `nginx-plain.conf`, `missing.conf`, and no argument. Print the exit code after each run."
+      ],
+      "hints": [
+        "Start with `CONF=$1` and `[ -n \"$CONF\" ] || { echo \"usage: ...\" >&2; exit 2; }`.",
+        "Use a regex that allows more spaces: `grep -Eq 'listen[[:space:]]+443' \"$CONF\"`.",
+        "Loop for the test: `for f in nginx-tls.conf nginx-plain.conf missing.conf \"\"; do bash check-tls.sh $f; echo \"exit: $?\"; done`."
+      ],
+      "solution": [
+        "cat > check-tls.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: check-tls.sh <nginx.conf>   exit 0 = TLS on, 1 = TLS off, 2 = usage error",
+        "CONF=$1",
+        "[ -n \"$CONF\" ] || { echo \"usage: check-tls.sh <nginx.conf>\" >&2; exit 2; }",
+        "[ -f \"$CONF\" ]  || { echo \"error: $CONF not found\" >&2; exit 2; }",
+        "if grep -Eq 'listen[[:space:]]+443' \"$CONF\"; then",
+        "  echo \"TLS on: $CONF\"",
+        "  exit 0",
+        "else",
+        "  echo \"TLS off: $CONF\"",
+        "  exit 1",
+        "fi",
+        "EOF",
+        "for f in nginx-tls.conf nginx-plain.conf missing.conf \"\"; do",
+        "  bash check-tls.sh $f; echo \"exit: $?\"",
+        "done"
+      ],
+      "explanation": [
+        {
+          "part": "[ -n \"$CONF\" ] || { ...; exit 2; }",
+          "meaning": "Guard: stop early with usage when the argument is missing."
+        },
+        {
+          "part": "[ -f \"$CONF\" ]",
+          "meaning": "Check the file exists before reading it."
+        },
+        {
+          "part": "grep -Eq",
+          "meaning": "`-E` extended regex, `-q` quiet (only the exit code)."
+        },
+        {
+          "part": "[[:space:]]+",
+          "meaning": "One or more spaces or tabs. More robust than one exact space."
+        },
+        {
+          "part": "exit 0 / 1 / 2",
+          "meaning": "Different codes so CI can tell \"off\" from \"broken input\"."
+        }
+      ],
+      "expected_output": "TLS on: nginx-tls.conf\nexit: 0\nTLS off: nginx-plain.conf\nexit: 1\nerror: missing.conf not found\nexit: 2\nusage: check-tls.sh <nginx.conf>\nexit: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Keeping `A && B || C` in the script: if `B` fails, `C` also runs. An `if` block is clearer.",
+        "Printing errors to stdout. Other tools that read stdout get confused. Errors go to `>&2`."
+      ],
+      "interview_say": "When I turn a one-liner into a script, I add argument checks, file checks, clear messages on stderr, and meaningful exit codes, so it works well in CI.",
+      "try_yourself": "Make the script accept many files: loop over `\"$@\"` and exit 1 if any file has TLS off."
+    },
+    {
+      "id": "d07p05",
+      "title": "Mini project: release-check.sh",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 15,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Before a release goes live, a script must check the release folder and write a short report file for the team chat. This combines Week 1: arguments, file tests, permissions, variables, a here-doc, redirects and exit codes.",
+      "task": [
+        "Write `release-check.sh <folder>`. Check the argument and that the folder exists (`-d`).",
+        "Check: `VERSION` is not empty (`-s`), `start.sh` is executable (`-x`), `.env` has permission 600 (`stat -c %a`).",
+        "Count problems. Write `report.txt` with a here-doc: folder, version, number of problems, and the result PASS or FAIL.",
+        "Print the report. Exit 0 if no problems, else exit 1.",
+        "Run it on `rel-good` and `rel-bad` and print the exit code each time."
+      ],
+      "hints": [
+        "Keep a variable `PROBLEMS=0` and a list `NOTES=\"\"`. Add to both when a check fails.",
+        "Version: `VERSION=$(cat \"$DIR/VERSION\" 2>/dev/null)` and use `${VERSION:-unknown}` in the report.",
+        "Permission: `[ \"$(stat -c %a \"$DIR/.env\")\" = 600 ]`."
+      ],
+      "solution": [
+        "cat > release-check.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: release-check.sh <release-folder>",
+        "DIR=$1",
+        "[ -n \"$DIR\" ] || { echo \"usage: release-check.sh <release-folder>\" >&2; exit 2; }",
+        "[ -d \"$DIR\" ] || { echo \"error: $DIR is not a folder\" >&2; exit 2; }",
+        "PROBLEMS=0",
+        "NOTES=\"\"",
+        "fail() { PROBLEMS=$((PROBLEMS + 1)); NOTES=\"$NOTES- $1\"$'\\n'; }",
+        "[ -s \"$DIR/VERSION\" ] || fail \"VERSION is missing or empty\"",
+        "[ -x \"$DIR/start.sh\" ] || fail \"start.sh is not executable\"",
+        "[ \"$(stat -c %a \"$DIR/.env\")\" = 600 ] || fail \".env permission is $(stat -c %a \"$DIR/.env\"), must be 600\"",
+        "VERSION=$(cat \"$DIR/VERSION\" 2>/dev/null)",
+        "if [ \"$PROBLEMS\" -eq 0 ]; then RESULT=PASS; else RESULT=FAIL; fi",
+        "cat > report.txt <<REPORT",
+        "Release check: $DIR",
+        "Version:  ${VERSION:-unknown}",
+        "Problems: $PROBLEMS",
+        "${NOTES}Result:   $RESULT",
+        "REPORT",
+        "cat report.txt",
+        "[ \"$RESULT\" = PASS ]",
+        "EOF",
+        "bash release-check.sh rel-good; echo \"exit code: $?\"",
+        "echo",
+        "bash release-check.sh rel-bad; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "guards with exit 2",
+          "meaning": "Wrong usage stops the script before any check."
+        },
+        {
+          "part": "fail() { ... }",
+          "meaning": "A tiny function: count the problem and remember the message (functions are Day 9)."
+        },
+        {
+          "part": "$'\\n'",
+          "meaning": "A real new line character, so each note is on its own line."
+        },
+        {
+          "part": "cat > report.txt <<REPORT",
+          "meaning": "Here-doc with variables (unquoted delimiter), Day 4."
+        },
+        {
+          "part": "${VERSION:-unknown}",
+          "meaning": "Default text when the version is empty."
+        },
+        {
+          "part": "[ \"$RESULT\" = PASS ]",
+          "meaning": "The last command decides the exit code of the script: 0 for PASS, 1 for FAIL."
+        }
+      ],
+      "expected_output": "Release check: rel-good\nVersion:  3.0.0\nProblems: 0\nResult:   PASS\nexit code: 0\n\nRelease check: rel-bad\nVersion:  unknown\nProblems: 3\n- VERSION is missing or empty\n- start.sh is not executable\n- .env permission is 664, must be 600\nResult:   FAIL\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Indenting the here-doc lines in the real file: the spaces go into the report. Keep report lines at the start of the line (or use `<<-` with tabs).",
+        "Calling `stat` on a missing `.env`: `stat: cannot statx 'rel-x/.env': No such file or directory` (Ubuntu 22.04 says `cannot stat`). Check `-e` first in a real script."
+      ],
+      "checks": [
+        {
+          "run": "stat -c %a rel-x/.env",
+          "expect": "stat: cannot statx 'rel-x/.env': No such file or directory"
+        }
+      ],
+      "interview_say": "My release check validates input, runs each check, collects problems, writes a report with a here-doc, and returns 0 or 1 so the pipeline can stop a bad release.",
+      "try_yourself": "Add a fourth check: the folder must have a `README.md`. Then add `--quiet` as a second argument that hides the report but keeps the exit code."
+    },
+    {
+      "id": "d07p06",
+      "title": "Status code summary from an access log",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team lead asks for a quick summary in the chat: how many requests had each status code, and which IP made the most 500 errors. The log is `access.log` (IP, method, URL, status).",
+      "task": [
+        "Print the count of each status code with `awk '{print $4}'`, `sort` and `uniq -c`.",
+        "Save that summary to `status.txt` and show it on the screen at the same time (`tee`).",
+        "Find the IPs with 500 errors and count them per IP."
+      ],
+      "hints": [
+        "`awk '{print $4}' access.log` prints the 4th word of each line (awk is Day 11, here only this one form).",
+        "`... | sort | uniq -c | tee status.txt`",
+        "`grep ' 500$' access.log | awk '{print $1}' | sort | uniq -c`"
+      ],
+      "solution": [
+        "awk '{print $4}' access.log | sort | uniq -c | tee status.txt",
+        "echo \"--- 500 errors per IP ---\"",
+        "grep ' 500$' access.log | awk '{print $1}' | sort | uniq -c"
+      ],
+      "explanation": [
+        {
+          "part": "awk '{print $4}'",
+          "meaning": "Print field 4 (the status code). Fields are split by spaces."
+        },
+        {
+          "part": "sort | uniq -c",
+          "meaning": "Group equal lines and count them (Day 2)."
+        },
+        {
+          "part": "tee status.txt",
+          "meaning": "Show and save at the same time (Day 4)."
+        },
+        {
+          "part": "' 500$'",
+          "meaning": "Only lines that end with ` 500`."
+        }
+      ],
+      "expected_output": "      3 200\n      1 201\n      2 500\n--- 500 errors per IP ---\n      2 10.0.0.2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using double quotes around the awk code: `awk \"{print $4}\"`. Bash replaces `$4` (empty) first, so awk prints whole lines.",
+        "`grep 500` without anchors also matches `/api/500-items` or a size of 1500 bytes."
+      ],
+      "checks": [
+        {
+          "run": "awk \"{print $4}\" access.log | head -n 1",
+          "expect": "10.0.0.1 GET /api/todos 200"
+        }
+      ],
+      "interview_say": "To summarise a log I cut the field I need, then `sort | uniq -c`. I anchor grep patterns to avoid false matches.",
+      "try_yourself": "Add `| sort -rn | head -n 1` to get only the most common status code."
+    }
+  ],
+  "interview": [
+    {
+      "q": "Rapid 1: Absolute vs relative path?",
+      "a": "Absolute starts at `/` and works from anywhere. Relative starts from the current folder.",
+      "topic": "Files"
+    },
+    {
+      "q": "Rapid 2: Hard link vs symlink?",
+      "a": "Hard link = second name for the same data (survives delete). Symlink = path to a target (breaks if the target is deleted, can point to folders).",
+      "topic": "Files"
+    },
+    {
+      "q": "Rapid 3: How do you show the last 50 lines of a log and keep watching?",
+      "a": "`tail -n 50 -f app.log`",
+      "topic": "Text"
+    },
+    {
+      "q": "Rapid 4: What is 644? What is 755?",
+      "a": "644 = rw-r--r-- (files, configs). 755 = rwxr-xr-x (scripts, folders).",
+      "topic": "Permissions"
+    },
+    {
+      "q": "Rapid 5: Does root obey file permissions?",
+      "a": "Mostly no. Root ignores read and write permissions. 'Others' means other normal users, not root.",
+      "topic": "Permissions"
+    },
+    {
+      "q": "Rapid 6: `>` vs `>>`?",
+      "a": "`>` overwrites, `>>` appends.",
+      "topic": "Redirection"
+    },
+    {
+      "q": "Rapid 7: How do you hide all output of a command?",
+      "a": "`cmd > /dev/null 2>&1`",
+      "topic": "Redirection"
+    },
+    {
+      "q": "Rapid 8: Single vs double quotes?",
+      "a": "Single: literal, nothing replaced. Double: variables and `$( )` replaced, spaces kept together.",
+      "topic": "Variables"
+    },
+    {
+      "q": "Rapid 9: What does `export` do?",
+      "a": "It makes a variable visible to child processes (scripts and programs started from this shell).",
+      "topic": "Variables"
+    },
+    {
+      "q": "Rapid 10: What exit code means success, and how do you see it?",
+      "a": "0 means success. `echo $?` right after the command shows it.",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "readlink",
+      "meaning": "Show where a symlink points (find broken links)",
+      "example": "readlink current",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "ls -ld folder",
+      "meaning": "Permissions of the folder itself, not its content",
+      "example": "ls -ld logs",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "stat -c %a",
+      "meaning": "Permission as a number (for script checks)",
+      "example": "[ \"$(stat -c %a .env)\" = 600 ]",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "\"$DIR\"/*.log",
+      "meaning": "Quote the variable, keep the wildcard outside",
+      "example": "for f in \"$DIR\"/*.log; do ...",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": ">&2; exit 2",
+      "meaning": "Usage error to stderr with exit code 2",
+      "example": "echo \"usage: ...\" >&2; exit 2",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "grep -Eq",
+      "meaning": "Quiet extended-regex test",
+      "example": "grep -Eq 'listen[[:space:]]+443' nginx.conf",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk '{print $N}'",
+      "meaning": "Print field number N",
+      "example": "awk '{print $4}' access.log",
+      "topic": "Text"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Files and links (Day 1)",
+      "problems": [
+        "d07p01",
+        "d07p02"
+      ]
+    },
+    {
+      "item": "Reading and searching (Day 2)",
+      "problems": [
+        "d07p04",
+        "d07p06"
+      ]
+    },
+    {
+      "item": "Permissions (Day 3)",
+      "problems": [
+        "d07p01",
+        "d07p05"
+      ]
+    },
+    {
+      "item": "Redirection and pipes (Day 4)",
+      "problems": [
+        "d07p02",
+        "d07p03",
+        "d07p06"
+      ]
+    },
+    {
+      "item": "Variables and quoting (Day 5)",
+      "problems": [
+        "d07p02",
+        "d07p03"
+      ]
+    },
+    {
+      "item": "Conditions and exit codes (Day 6)",
+      "problems": [
+        "d07p03",
+        "d07p04",
+        "d07p05"
+      ]
+    },
+    {
+      "item": "One small script that combines everything",
+      "problems": [
+        "d07p05"
+      ]
+    },
+    {
+      "item": "10 rapid interview questions",
+      "problems": []
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day07"
+}

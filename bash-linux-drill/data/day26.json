@@ -1,0 +1,762 @@
+{
+  "day": 26,
+  "week": 4,
+  "title": "Bash with DevOps tools",
+  "goal": "Use jq on JSON APIs, wrap kubectl, docker, nginx and terraform in safe scripts (with mocks when the tool is not installed), and handle secrets without printing them.",
+  "minutes": 90,
+  "needs": [
+    "jq"
+  ],
+  "setup": [
+    "mkdir -p ~/bash-practice/day26/api ~/bash-practice/day26/mockbin && cd ~/bash-practice/day26",
+    "# P1: a GitHub-style releases API (served by a local test server)",
+    "cat > api/releases.json <<'EOF'",
+    "[",
+    "  {\"tag_name\": \"v2.5.0-rc1\", \"prerelease\": true,  \"published_at\": \"2026-10-18\", \"assets\": [{\"name\": \"todo-cli-linux-amd64.tar.gz\", \"size\": 5242880}]},",
+    "  {\"tag_name\": \"v2.4.1\",     \"prerelease\": false, \"published_at\": \"2026-10-10\", \"assets\": [{\"name\": \"todo-cli-linux-amd64.tar.gz\", \"size\": 5100000}, {\"name\": \"todo-cli-darwin-arm64.tar.gz\", \"size\": 4900000}]},",
+    "  {\"tag_name\": \"v2.4.0\",     \"prerelease\": false, \"published_at\": \"2026-09-28\", \"assets\": [{\"name\": \"todo-cli-linux-amd64.tar.gz\", \"size\": 5050000}]}",
+    "]",
+    "EOF",
+    "# P2: what \"kubectl get pods -o json\" returns for the to-do app",
+    "cat > pods.json <<'EOF'",
+    "{\"items\": [",
+    "  {\"metadata\": {\"name\": \"todo-frontend-7d9f8-abcde\"}, \"status\": {\"phase\": \"Running\", \"containerStatuses\": [{\"ready\": true, \"restartCount\": 0, \"state\": {\"running\": {}}}]}},",
+    "  {\"metadata\": {\"name\": \"todo-backend-5c6b4-fghij\"}, \"status\": {\"phase\": \"Running\", \"containerStatuses\": [{\"ready\": false, \"restartCount\": 7, \"state\": {\"waiting\": {\"reason\": \"CrashLoopBackOff\"}}}]}},",
+    "  {\"metadata\": {\"name\": \"todo-backend-5c6b4-klmno\"}, \"status\": {\"phase\": \"Running\", \"containerStatuses\": [{\"ready\": true, \"restartCount\": 1, \"state\": {\"running\": {}}}]}},",
+    "  {\"metadata\": {\"name\": \"todo-worker-6f7c9-pqrst\"}, \"status\": {\"phase\": \"Pending\", \"containerStatuses\": [{\"ready\": false, \"restartCount\": 0, \"state\": {\"waiting\": {\"reason\": \"ImagePullBackOff\"}}}]}}",
+    "]}",
+    "EOF",
+    "# mock tools: they print or read files, they never touch a real cluster",
+    "printf '%s\\n' '#!/bin/bash' '# MOCK kubectl for practice' 'if [ \"$1 $2\" = \"get pods\" ] && [[ \"$*\" == *\"-o json\"* ]]; then cat ~/bash-practice/day26/pods.json; exit 0; fi' 'echo \"[mock kubectl] kubectl $*\"' > mockbin/kubectl",
+    "printf '%s\\n' '#!/bin/bash' '# MOCK docker for practice' 'if [ \"$1\" = images ]; then cat ~/bash-practice/day26/images.txt; exit 0; fi' 'echo \"[mock docker] docker $*\"' > mockbin/docker",
+    "printf '%s\\n' '#!/bin/bash' '# MOCK systemctl for practice' 'echo \"[mock systemctl] systemctl $*\"' > mockbin/systemctl",
+    "printf '%s\\n' '#!/bin/bash' '# MOCK nginx: \"nginx -t -c FILE\" checks that braces match and that lines end with ; { or }' 'FILE=$3' 'n=0; depth=0' 'while IFS= read -r line; do' '  n=$((n + 1)); l=${line%%#*}; l=${l//[[:space:]]/}' '  [ -z \"$l\" ] && continue' '  case $l in *\"{\") depth=$((depth + 1)) ;; *\"}\") depth=$((depth - 1)) ;; *\";\") ;; *) echo \"nginx: [emerg] directive \\\"$(set -- $line; echo $1)\\\" is not terminated by \\\";\\\" in $FILE:$n\" >&2; echo \"nginx: configuration file $FILE test failed\" >&2; exit 1 ;; esac' 'done < \"$FILE\"' 'if [ \"$depth\" -ne 0 ]; then echo \"nginx: [emerg] unexpected end of file, expecting \\\"}\\\" in $FILE:$n\" >&2; echo \"nginx: configuration file $FILE test failed\" >&2; exit 1; fi' 'echo \"nginx: the configuration file $FILE syntax is ok\" >&2' 'echo \"nginx: configuration file $FILE test is successful\" >&2' > mockbin/nginx",
+    "printf '%s\\n' '#!/bin/bash' '# MOCK terraform for practice' 'case \"$1\" in' '  fmt) [ -f .unformatted ] && { echo \"main.tf\"; exit 3; }; exit 0 ;;' '  validate) echo \"Success! The configuration is valid.\"; exit 0 ;;' '  plan) echo \"Plan: 1 to add, 0 to change, 0 to destroy.\"; [[ \"$*\" == *-detailed-exitcode* ]] && exit 2; exit 0 ;;' '  *) echo \"[mock terraform] terraform $*\" ;;' 'esac' > mockbin/terraform",
+    "chmod +x mockbin/*",
+    "# P3: an env file with secrets (fake values)",
+    "printf '%s\\n' 'DB_HOST=db.todo.internal' 'DB_PASSWORD=Sup3rS3cret!' 'API_TOKEN=ghp_1234567890abcdefXYZ' > .env",
+    "chmod 644 .env",
+    "# P4: an nginx folder (practice copy) and a broken deploy script",
+    "mkdir -p etc-nginx/sites-enabled new-config",
+    "printf '%s\\n' 'server {' '    listen 80;' '    server_name todo.local;' '    location / {' '        proxy_pass http://127.0.0.1:3000;' '    }' '}' > etc-nginx/sites-enabled/todo.conf",
+    "printf '%s\\n' 'server {' '    listen 80;' '    server_name todo.local;' '    location /api/ {' '        proxy_pass http://127.0.0.1:8080' '    }' '}' > new-config/todo.conf",
+    "printf '%s\\n' 'server {' '    listen 80;' '    server_name todo.local;' '    location /api/ {' '        proxy_pass http://127.0.0.1:8080;' '    }' '}' > new-config/todo-good.conf",
+    "printf '%s\\n' '#!/bin/bash' '# Install a new nginx site config. Test it BEFORE reloading.' '# If the test fails: keep (or put back) the old config, do not reload, exit 1.' 'NEW=$1' 'cp \"$NEW\" etc-nginx/sites-enabled/todo.conf' 'systemctl reload nginx' 'nginx -t -c etc-nginx/sites-enabled/todo.conf' 'echo \"deployed $NEW\"' > deploy-nginx.sh",
+    "# P5: \"docker images\" output on the build server",
+    "printf '%s\\n' 'todo-frontend 1.4.0 a1b2c3d4e5f6 2026-10-18' 'todo-frontend 1.3.2 b2c3d4e5f6a1 2026-10-02' 'todo-frontend 1.3.1 c3d4e5f6a1b2 2026-09-20' 'todo-backend 2.4.1 d4e5f6a1b2c3 2026-10-10' 'todo-backend 2.4.0 e5f6a1b2c3d4 2026-09-28' 'todo-backend 2.3.9 f6a1b2c3d4e5 2026-09-01' 'todo-backend 2.3.8 0a1b2c3d4e5f 2026-08-15' '<none> <none> 1b2c3d4e5f6a 2026-10-19' 'postgres 16 2c3d4e5f6a1b 2026-07-01' > images.txt",
+    "cd ~/bash-practice/day26"
+  ],
+  "warmup": [
+    {
+      "q": "Which exit codes does a Nagios-style check use?",
+      "a": "0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.",
+      "from_day": 25
+    },
+    {
+      "q": "How do you send a JSON body with curl?",
+      "a": "`curl -fsS -X POST -H 'Content-Type: application/json' --data \"$JSON\" URL`",
+      "from_day": 25
+    },
+    {
+      "q": "What does `set -x` print, and why can it be dangerous?",
+      "a": "Each command with its values before it runs. It can print secrets (tokens, passwords) into CI logs.",
+      "from_day": 22
+    },
+    {
+      "q": "What permission must an env file with passwords have?",
+      "a": "600 (only the owner).",
+      "from_day": 3
+    }
+  ],
+  "problems": [
+    {
+      "id": "d26p01",
+      "title": "jq: read a JSON API",
+      "type": "command",
+      "topic": "DevOps tools",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "An install script must download the newest STABLE release of `todo-cli` from a GitHub-style releases API. The API returns JSON, so the user reads it with `jq` instead of grep. A local test server plays the API.",
+      "task": [
+        "Start the test API: `python3 -m http.server 8131 --bind 127.0.0.1 --directory api &`.",
+        "Get the JSON with `curl -fsS` and print the number of releases (`length`).",
+        "Print all tags with `-r` (raw text, no quotes).",
+        "Print only stable releases (`select(.prerelease == false)`) with their date.",
+        "Get the newest stable tag into a variable and build the download URL for the linux-amd64 asset."
+      ],
+      "hints": [
+        "`jq '.[0]'` = first item; `.[]` = each item; `.tag_name` = a field.",
+        "`jq -r '.[] | select(.prerelease == false) | \"\\(.tag_name) \\(.published_at)\"'`",
+        "`TAG=$(curl -fsS URL | jq -r 'map(select(.prerelease == false)) | .[0].tag_name')`"
+      ],
+      "solution": [
+        "python3 -m http.server 8131 --bind 127.0.0.1 --directory api > /dev/null 2>&1 &",
+        "SRV=$!",
+        "sleep 1",
+        "API=http://127.0.0.1:8131/releases.json",
+        "curl -fsS \"$API\" | jq 'length'",
+        "curl -fsS \"$API\" | jq -r '.[].tag_name'",
+        "echo \"=== stable releases ===\"",
+        "curl -fsS \"$API\" | jq -r '.[] | select(.prerelease == false) | \"\\(.tag_name)  \\(.published_at)\"'",
+        "TAG=$(curl -fsS \"$API\" | jq -r 'map(select(.prerelease == false)) | .[0].tag_name')",
+        "ASSET=$(curl -fsS \"$API\" | jq -r --arg t \"$TAG\" '.[] | select(.tag_name == $t) | .assets[] | select(.name | contains(\"linux-amd64\")) | .name')",
+        "echo \"download: https://github.com/wicky/todo-cli/releases/download/$TAG/$ASSET\"",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "jq 'length'",
+          "meaning": "Number of items in the array."
+        },
+        {
+          "part": "-r",
+          "meaning": "Raw output: strings without quotes, ready for bash variables."
+        },
+        {
+          "part": ".[].tag_name",
+          "meaning": "For each item, the field `tag_name`."
+        },
+        {
+          "part": "select(cond)",
+          "meaning": "Keep only items where the condition is true."
+        },
+        {
+          "part": "\"\\(.a) \\(.b)\"",
+          "meaning": "String with fields inside (jq string interpolation)."
+        },
+        {
+          "part": "--arg t \"$TAG\"",
+          "meaning": "Pass a bash value into jq safely as `$t`."
+        },
+        {
+          "part": "map(select(...)) | .[0]",
+          "meaning": "Filter the array, then take the first (newest) one."
+        }
+      ],
+      "expected_output": "3\nv2.5.0-rc1\nv2.4.1\nv2.4.0\n=== stable releases ===\nv2.4.1  2026-10-10\nv2.4.0  2026-09-28\ndownload: https://github.com/wicky/todo-cli/releases/download/v2.4.1/todo-cli-linux-amd64.tar.gz",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Parsing JSON with grep and cut: it breaks when the API changes spacing or field order. Use jq.",
+        "Forgetting `-r`: the variable contains quotes, like `\"v2.4.1\"`, and the URL is wrong.",
+        "Putting a bash variable inside the jq program in double quotes. Use `--arg` instead."
+      ],
+      "interview_say": "I read JSON from APIs with `curl -fsS URL | jq -r '...'`: `select` to filter, `.field` to pick values, `-r` for raw strings, and `--arg` to pass bash variables in safely.",
+      "try_yourself": "Print the total size of all assets of v2.4.1 in MB: `jq '[.[] | select(.tag_name == \"v2.4.1\") | .assets[].size] | add / 1048576'`."
+    },
+    {
+      "id": "d26p02",
+      "title": "kubectl + jq: find unhealthy pods (mock)",
+      "type": "script",
+      "topic": "DevOps tools",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The to-do app on Kubernetes is partly down. A script must list every pod with its phase, restarts and waiting reason, and suggest commands for the bad ones. kubectl is replaced by a mock that returns saved JSON, so no cluster is needed.",
+      "task": [
+        "Put the mocks first in PATH: `export PATH=\"$PWD/mockbin:$PATH\"`. Check `command -v kubectl`.",
+        "Print a table: name, phase, ready, restarts, waiting reason (`@tsv`, then `awk printf` for columns).",
+        "List pods that are not ready or have more than 5 restarts.",
+        "For each bad pod, print the next debug commands (`kubectl describe`, `kubectl logs --previous`)."
+      ],
+      "hints": [
+        "`kubectl get pods -o json | jq -r '.items[] | [ .metadata.name, .status.phase, ... ] | @tsv'`",
+        "`//` gives a default: `.state.waiting.reason // \"-\"`.",
+        "Select: `select(.status.containerStatuses[0].ready == false or .status.containerStatuses[0].restartCount > 5)`."
+      ],
+      "solution": [
+        "export PATH=\"$PWD/mockbin:$PATH\"",
+        "echo \"kubectl here is: $(command -v kubectl | sed \"s|$HOME|~|\")\"",
+        "kubectl get pods -o json | jq -r '",
+        "  [\"NAME\", \"PHASE\", \"READY\", \"RESTARTS\", \"REASON\"],",
+        "  (.items[] | .status.containerStatuses[0] as $c |",
+        "    [.metadata.name, .status.phase, ($c.ready | tostring), ($c.restartCount | tostring), ($c.state.waiting.reason // \"-\")])",
+        "  | @tsv' | awk -F'\\t' '{ printf \"%-26s %-8s %-6s %-9s %s\\n\", $1, $2, $3, $4, $5 }'",
+        "echo \"=== needs attention ===\"",
+        "kubectl get pods -o json \\",
+        "  | jq -r '.items[] | select(.status.containerStatuses[0].ready == false or .status.containerStatuses[0].restartCount > 5) | .metadata.name' \\",
+        "  | while IFS= read -r pod; do",
+        "      echo \"$pod -> kubectl describe pod $pod | tail -n 20; kubectl logs $pod --previous\"",
+        "    done"
+      ],
+      "explanation": [
+        {
+          "part": "mockbin first in PATH",
+          "meaning": "Our fake `kubectl` runs instead of a real one (Day 5 PATH)."
+        },
+        {
+          "part": "as $c",
+          "meaning": "Save the first container status in a jq variable to keep the line short."
+        },
+        {
+          "part": "// \"-\"",
+          "meaning": "Alternative operator: use `-` when the value is missing (running pods have no waiting reason)."
+        },
+        {
+          "part": "@tsv | awk -F'\\t' printf",
+          "meaning": "Tab-separated values, then aligned columns. (`column -t` does the same, if the package `bsdextrautils` is installed.)"
+        },
+        {
+          "part": "CrashLoopBackOff",
+          "meaning": "The container starts and crashes again and again: check `kubectl logs --previous`."
+        },
+        {
+          "part": "ImagePullBackOff",
+          "meaning": "The image cannot be pulled: wrong tag, or no access to the registry."
+        }
+      ],
+      "expected_output": "kubectl here is: ~/bash-practice/day26/mockbin/kubectl\nNAME                       PHASE    READY  RESTARTS  REASON\ntodo-frontend-7d9f8-abcde  Running  true   0         -\ntodo-backend-5c6b4-fghij   Running  false  7         CrashLoopBackOff\ntodo-backend-5c6b4-klmno   Running  true   1         -\ntodo-worker-6f7c9-pqrst    Pending  false  0         ImagePullBackOff\n=== needs attention ===\ntodo-backend-5c6b4-fghij -> kubectl describe pod todo-backend-5c6b4-fghij | tail -n 20; kubectl logs todo-backend-5c6b4-fghij --previous\ntodo-worker-6f7c9-pqrst -> kubectl describe pod todo-worker-6f7c9-pqrst | tail -n 20; kubectl logs todo-worker-6f7c9-pqrst --previous",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `kubectl get pods | grep -v Running` to find problems: a pod can be `Running` but not ready, or restarting all the time.",
+        "Testing cluster scripts directly on production. Use `--dry-run=client`, a test namespace, or mocks like here."
+      ],
+      "interview_say": "For Kubernetes scripts I use `kubectl get -o json | jq` instead of parsing the table. A pod can be Running but not ready, so I check readiness, restarts and the waiting reason, then look at `describe` and `logs --previous`.",
+      "try_yourself": "Count pods per phase: `kubectl get pods -o json | jq -r '.items[].status.phase' | sort | uniq -c`."
+    },
+    {
+      "id": "d26p03",
+      "title": "Secrets: env files, masking, and set -x leaks",
+      "type": "command",
+      "topic": "DevOps tools",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A deploy script needs `DB_PASSWORD` and `API_TOKEN` from `.env`. In the last incident, the token appeared in the Jenkins log because of `set -x`. The user loads secrets safely, never prints them, and shows the leak and the fix.",
+      "task": [
+        "Check `.env` permissions. If not 600, fix them before loading.",
+        "Load it with `set -a; source .env; set +a`. Print the DB host and a masked token (first 4 characters + `****`).",
+        "Show the leak: run a tiny `bash -x` command that uses the token. Then the safe version with `set +x` around the secret.",
+        "Make sure `.env` is in `.gitignore`."
+      ],
+      "hints": [
+        "`[ \"$(stat -c %a .env)\" = 600 ] || chmod 600 .env`",
+        "`set -a` exports every variable that is set while it is on.",
+        "Mask: `${API_TOKEN:0:4}****`. Never `echo \"$API_TOKEN\"`."
+      ],
+      "solution": [
+        "echo \".env permission: $(stat -c %a .env)\"",
+        "[ \"$(stat -c %a .env)\" = 600 ] || { chmod 600 .env; echo \"fixed to $(stat -c %a .env)\"; }",
+        "set -a; source .env; set +a",
+        "echo \"DB host: $DB_HOST\"",
+        "echo \"API token: ${API_TOKEN:0:4}****  (length ${#API_TOKEN})\"",
+        "echo \"=== the leak: set -x prints the value ===\"",
+        "bash -xc 'curl_args=\"-H Authorization: token $API_TOKEN\"; : \"$curl_args\"' 2>&1 | grep -c \"$API_TOKEN\" | sed 's/^/lines with the token in the trace: /'",
+        "echo \"=== the fix: no trace around secrets ===\"",
+        "bash -c 'set -x; echo deploy start; { set +x; } 2>/dev/null; curl_args=\"-H Authorization: token $API_TOKEN\"; set -x; echo deploy done' 2>&1 | grep -c \"$API_TOKEN\" | sed 's/^/lines with the token in the trace: /'",
+        "grep -qxF '.env' .gitignore 2>/dev/null || echo '.env' >> .gitignore",
+        "cat .gitignore"
+      ],
+      "explanation": [
+        {
+          "part": "chmod 600 .env",
+          "meaning": "Only the owner may read secrets (Day 3)."
+        },
+        {
+          "part": "set -a; source .env; set +a",
+          "meaning": "Load `KEY=value` lines and export them for child processes, then stop auto-export."
+        },
+        {
+          "part": "${API_TOKEN:0:4}****",
+          "meaning": "Show a short prefix only, to confirm which token is loaded."
+        },
+        {
+          "part": "bash -x leak",
+          "meaning": "The trace prints the expanded command, so the token is in the log."
+        },
+        {
+          "part": "{ set +x; } 2>/dev/null",
+          "meaning": "Turn tracing off without printing the `set +x` line itself."
+        },
+        {
+          "part": ".gitignore",
+          "meaning": "Never commit `.env`. Use CI secrets (Jenkins credentials, GitHub Actions secrets) or a secret manager."
+        }
+      ],
+      "expected_output": ".env permission: 644\nfixed to 600\nDB host: db.todo.internal\nAPI token: ghp_****  (length 23)\n=== the leak: set -x prints the value ===\nlines with the token in the trace: 2\n=== the fix: no trace around secrets ===\nlines with the token in the trace: 0\n.env",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Passing a secret as a command argument (`mysql -pSecret`): other users can see it in `ps aux`. Use env variables or files.",
+        "`echo \"token=$API_TOKEN\"` in a debug line \"just for now\". It ends up in CI logs forever.",
+        "Storing secrets in the Docker image: anyone who pulls the image can read them."
+      ],
+      "interview_say": "I keep secrets out of code and logs: they come from CI secrets or a 600 env file, I never echo them, I mask them if I must show them, and I turn off `set -x` around commands that use them.",
+      "try_yourself": "Run `ps aux | grep -i token` while a command with a token argument runs (`sleep 30 --token=abc &` fails, try `bash -c 'sleep 30' token=abc &`). What can other users see?"
+    },
+    {
+      "id": "d26p04",
+      "title": "Find the bug: reload nginx only after a good test",
+      "type": "fix-bug",
+      "topic": "DevOps tools",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`deploy-nginx.sh` installed a config with a missing `;` and reloaded nginx before testing it. In production, a bad reload can take the site down. nginx and systemctl are mocks here; the practice folder `etc-nginx` stands in for `/etc/nginx`.",
+      "task": [
+        "Use the mocks: `export PATH=\"$PWD/mockbin:$PATH\"`. Run `bash deploy-nginx.sh new-config/todo.conf; echo $?`.",
+        "Find 3 bugs: reload before the test, the test result is ignored, and no way back to the old config.",
+        "Fix it: back up the current config, copy the new one, `nginx -t`, reload only if OK, else restore and exit 1.",
+        "Test with the bad `new-config/todo.conf` and the good `new-config/todo-good.conf`."
+      ],
+      "hints": [
+        "The real pattern is `nginx -t && systemctl reload nginx`.",
+        "Backup: `cp todo.conf todo.conf.bak` before copying the new file.",
+        "On failure: `mv todo.conf.bak todo.conf`, print an error, `exit 1`."
+      ],
+      "solution": [
+        "export PATH=\"$PWD/mockbin:$PATH\"",
+        "cp etc-nginx/sites-enabled/todo.conf original.conf          # keep a copy for the second test",
+        "bash deploy-nginx.sh new-config/todo.conf; echo \"exit code: $?\"",
+        "cp original.conf etc-nginx/sites-enabled/todo.conf          # undo the broken deploy",
+        "cat > deploy-nginx.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Install a new nginx site config. Test it BEFORE reloading.",
+        "# If the test fails: keep (or put back) the old config, do not reload, exit 1.",
+        "set -euo pipefail",
+        "NEW=${1:?usage: deploy-nginx.sh NEW_CONFIG}",
+        "CONF=etc-nginx/sites-enabled/todo.conf",
+        "cp \"$CONF\" \"$CONF.bak\"",
+        "cp \"$NEW\" \"$CONF\"",
+        "if nginx -t -c \"$CONF\"; then",
+        "  systemctl reload nginx",
+        "  rm -f \"$CONF.bak\"",
+        "  echo \"deployed $NEW\"",
+        "else",
+        "  mv \"$CONF.bak\" \"$CONF\"",
+        "  echo \"ERROR: $NEW failed the nginx test; old config restored, nginx NOT reloaded\" >&2",
+        "  exit 1",
+        "fi",
+        "EOF",
+        "echo \"--- fixed, bad config ---\"",
+        "bash deploy-nginx.sh new-config/todo.conf; echo \"exit code: $?\"",
+        "cmp -s original.conf etc-nginx/sites-enabled/todo.conf && echo \"the live config is still the old one\"",
+        "echo \"--- fixed, good config ---\"",
+        "bash deploy-nginx.sh new-config/todo-good.conf; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "reload first",
+          "meaning": "Bug 1: nginx was reloaded with an untested config."
+        },
+        {
+          "part": "test result ignored",
+          "meaning": "Bug 2: the script printed `deployed` and exited 0 after a failed test."
+        },
+        {
+          "part": "no backup",
+          "meaning": "Bug 3: the old, working config was overwritten with no way back."
+        },
+        {
+          "part": "nginx -t",
+          "meaning": "Test the configuration syntax. Real nginx: `sudo nginx -t` tests all of `/etc/nginx`."
+        },
+        {
+          "part": "if test; then reload; else restore",
+          "meaning": "Validate, then apply, with a rollback path. The same idea as `terraform plan` before `apply`."
+        },
+        {
+          "part": "mocks",
+          "meaning": "`mockbin/nginx` imitates nginx's messages; the real one is `sudo apt install nginx`."
+        }
+      ],
+      "expected_output": "[mock systemctl] systemctl reload nginx\nnginx: [emerg] directive \"proxy_pass\" is not terminated by \";\" in etc-nginx/sites-enabled/todo.conf:5\nnginx: configuration file etc-nginx/sites-enabled/todo.conf test failed\ndeployed new-config/todo.conf\nexit code: 0\n--- fixed, bad config ---\nnginx: [emerg] directive \"proxy_pass\" is not terminated by \";\" in etc-nginx/sites-enabled/todo.conf:5\nnginx: configuration file etc-nginx/sites-enabled/todo.conf test failed\nERROR: new-config/todo.conf failed the nginx test; old config restored, nginx NOT reloaded\nexit code: 1\nthe live config is still the old one\n--- fixed, good config ---\nnginx: the configuration file etc-nginx/sites-enabled/todo.conf syntax is ok\nnginx: configuration file etc-nginx/sites-enabled/todo.conf test is successful\n[mock systemctl] systemctl reload nginx\ndeployed new-config/todo-good.conf\nexit code: 0",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`systemctl restart nginx` instead of `reload`: restart drops open connections; reload keeps serving with the old workers while new ones start.",
+        "Editing files directly in `/etc/nginx` on many servers by hand. Use config management (Ansible) or a container image."
+      ],
+      "checks": [
+        {
+          "run": "export PATH=\"$PWD/mockbin:$PATH\"; nginx -t -c new-config/todo.conf",
+          "expect": "is not terminated by \";\""
+        }
+      ],
+      "interview_say": "Before reloading nginx I always run `nginx -t`. My deploy script backs up the old config, tests the new one, reloads only if the test passes, and restores the backup and fails otherwise.",
+      "try_yourself": "Add a health check after the reload (`curl -fsS localhost/health`). If it fails, restore the backup and reload again."
+    },
+    {
+      "id": "d26p05",
+      "title": "Docker cleanup: keep the 2 newest tags (dry run)",
+      "type": "script",
+      "topic": "DevOps tools",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The Jenkins build server's disk is full of old Docker images. Policy: for each repository keep the 2 newest tags, remove the rest, and remove dangling `<none>` images. The script prints `docker rmi` commands (dry run) so a human can check them first. `docker images` is a mock that prints saved output.",
+      "task": [
+        "Use the mocks. Read `docker images` (here: repository, tag, id, created date).",
+        "Sort by repository, then by date (newest first).",
+        "With awk, count tags per repository and print the ones after the 2nd.",
+        "Also print dangling `<none>` images. Print every action as `docker rmi ...` (dry run)."
+      ],
+      "hints": [
+        "`sort -k1,1 -k4,4r` = by repo, then date reversed.",
+        "`awk '$1 == \"<none>\" {print $3; next} ++seen[$1] > 2 {print $1 \":\" $2}'`",
+        "Real Docker: `docker images --format '{{.Repository}} {{.Tag}} {{.ID}} {{.CreatedAt}}'` gives the same columns."
+      ],
+      "solution": [
+        "export PATH=\"$PWD/mockbin:$PATH\"",
+        "KEEP=2",
+        "docker images | sort -k1,1 -k4,4r \\",
+        "  | awk -v keep=\"$KEEP\" '$1 == \"<none>\" { print $3; next } ++seen[$1] > keep { print $1 \":\" $2 }' \\",
+        "  | while IFS= read -r img; do",
+        "      echo \"docker rmi $img\"",
+        "    done",
+        "echo \"(dry run: nothing was removed. Real cleanup: pipe into 'sh' after checking, or use: docker image prune -f)\""
+      ],
+      "explanation": [
+        {
+          "part": "sort -k1,1 -k4,4r",
+          "meaning": "Group by repository; newest date first inside each group."
+        },
+        {
+          "part": "++seen[$1] > keep",
+          "meaning": "Count rows per repository; print only after the 2nd."
+        },
+        {
+          "part": "$1 == \"<none>\" ... next",
+          "meaning": "Dangling images (no tag): remove by ID, then skip the counter."
+        },
+        {
+          "part": "echo docker rmi",
+          "meaning": "Dry run: print, do not run (Day 4)."
+        },
+        {
+          "part": "docker image prune / system prune",
+          "meaning": "Built-in cleanup: `docker image prune -f` removes dangling images; `docker system df` shows usage."
+        }
+      ],
+      "expected_output": "docker rmi 1b2c3d4e5f6a\ndocker rmi todo-backend:2.3.9\ndocker rmi todo-backend:2.3.8\ndocker rmi todo-frontend:1.3.1\n(dry run: nothing was removed. Real cleanup: pipe into 'sh' after checking, or use: docker image prune -f)",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`docker rmi $(docker images -q)` removes everything, also images that running containers need (or fails with `conflict: unable to remove`).",
+        "Sorting dates as text works only for ISO dates (YYYY-MM-DD). Other formats sort wrong."
+      ],
+      "interview_say": "To clean Docker images I list them with a fixed `--format`, group by repository, keep the newest N tags, remove dangling images, and print the commands first as a dry run. `docker system df` shows what uses the space.",
+      "try_yourself": "Change KEEP to 1. Which images are added to the list?"
+    },
+    {
+      "id": "d26p06",
+      "title": "terraform in CI: fmt, validate, plan exit codes (mock)",
+      "type": "script",
+      "topic": "DevOps tools",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The infrastructure pipeline runs terraform in a shell step. `terraform plan -detailed-exitcode` returns 0 (no changes), 1 (error) or 2 (changes). The script must not treat 2 as a failure. terraform is a mock here.",
+      "task": [
+        "Use the mocks. Run `terraform fmt -check` and stop with a clear message if files are not formatted (create `.unformatted` to test).",
+        "Run `terraform validate`.",
+        "Run `terraform plan -detailed-exitcode -out=tfplan` and handle 0, 1 and 2 with `case`."
+      ],
+      "hints": [
+        "With `set -e`, exit code 2 would stop the script. Capture it: `terraform plan ... || rc=$?`.",
+        "`case $rc in 0) ... ;; 2) ... ;; *) ... ;; esac`",
+        "`fmt -check` exits 3 when files need formatting."
+      ],
+      "solution": [
+        "export PATH=\"$PWD/mockbin:$PATH\"",
+        "cat > tf-ci.sh <<'EOF'",
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "terraform fmt -check > /dev/null || { echo \"ERROR: run 'terraform fmt' first\" >&2; exit 1; }",
+        "terraform validate",
+        "rc=0",
+        "terraform plan -detailed-exitcode -out=tfplan || rc=$?",
+        "case $rc in",
+        "  0) echo \"no changes: nothing to apply\" ;;",
+        "  2) echo \"changes found: saved to tfplan, waiting for approval\" ;;",
+        "  *) echo \"ERROR: plan failed ($rc)\" >&2; exit 1 ;;",
+        "esac",
+        "EOF",
+        "bash tf-ci.sh; echo \"exit code: $?\"",
+        "touch .unformatted",
+        "bash tf-ci.sh; echo \"exit code: $?\"",
+        "rm -f .unformatted"
+      ],
+      "explanation": [
+        {
+          "part": "fmt -check",
+          "meaning": "Fail when files are not formatted (exit 3)."
+        },
+        {
+          "part": "validate",
+          "meaning": "Syntax and internal consistency, no cloud calls."
+        },
+        {
+          "part": "-detailed-exitcode",
+          "meaning": "0 = no changes, 1 = error, 2 = changes present."
+        },
+        {
+          "part": "|| rc=$?",
+          "meaning": "Catch the exit code so `set -e` does not stop the script on 2."
+        },
+        {
+          "part": "-out=tfplan",
+          "meaning": "Save the plan; `terraform apply tfplan` later applies exactly what was reviewed."
+        }
+      ],
+      "expected_output": "Success! The configuration is valid.\nPlan: 1 to add, 0 to change, 0 to destroy.\nchanges found: saved to tfplan, waiting for approval\nexit code: 0\nERROR: run 'terraform fmt' first\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Treating exit code 2 as a failure: the pipeline goes red whenever there are changes.",
+        "Running `terraform apply -auto-approve` without a reviewed plan in production."
+      ],
+      "interview_say": "In CI I run `terraform fmt -check`, `validate`, and `plan -detailed-exitcode -out=tfplan`. I handle exit code 2 as \"changes found\", not as an error, and apply only the saved plan after approval.",
+      "try_yourself": "Add `terraform show -no-color tfplan > plan.txt` (it will print a mock line here) and save it as a CI artifact."
+    },
+    {
+      "id": "d26p07",
+      "title": "Script patterns for git, docker, kubectl and aws",
+      "type": "concept",
+      "topic": "DevOps tools",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The same few patterns appear in almost every DevOps script. The user runs them with a dry-run wrapper: a `run` function that prints the command when `DRY_RUN=1` and runs it otherwise.",
+      "task": [
+        "Write `run() { if [ \"${DRY_RUN:-0}\" = 1 ]; then echo \"+ $*\"; else \"$@\"; fi; }`.",
+        "With `DRY_RUN=1`, use `run` for: docker build and push with a git-based tag, kubectl set image, rollout status, and an aws s3 cp.",
+        "Read the table of patterns."
+      ],
+      "hints": [
+        "`\"$@\"` runs the command with its arguments exactly (Day 9).",
+        "A tag from git: `TAG=$(git rev-parse --short HEAD 2>/dev/null || echo dev)`.",
+        "`kubectl rollout status deployment/X --timeout=120s` waits for the rollout."
+      ],
+      "solution": [
+        "run() { if [ \"${DRY_RUN:-0}\" = 1 ]; then echo \"+ $*\"; else \"$@\"; fi; }",
+        "DRY_RUN=1",
+        "TAG=$(git rev-parse --short HEAD 2>/dev/null || echo dev)",
+        "IMAGE=registry.example.com/todo-backend:$TAG",
+        "run docker build -t \"$IMAGE\" .",
+        "run docker push \"$IMAGE\"",
+        "run kubectl set image deployment/todo-backend backend=\"$IMAGE\" -n todo",
+        "run kubectl rollout status deployment/todo-backend -n todo --timeout=120s",
+        "run aws s3 cp build/report.html \"s3://todo-reports/$TAG/report.html\""
+      ],
+      "explanation": [
+        {
+          "part": "run()",
+          "meaning": "One switch for the whole script: `DRY_RUN=1 ./deploy.sh` shows every command, changes nothing."
+        },
+        {
+          "part": "git rev-parse --short HEAD || echo dev",
+          "meaning": "Commit id as image tag; `dev` when not in a git repo (like here)."
+        },
+        {
+          "part": "kubectl set image + rollout status",
+          "meaning": "Update the image, then wait until the new pods are ready (fails after the timeout)."
+        }
+      ],
+      "expected_output": "+ docker build -t registry.example.com/todo-backend:dev .\n+ docker push registry.example.com/todo-backend:dev\n+ kubectl set image deployment/todo-backend backend=registry.example.com/todo-backend:dev -n todo\n+ kubectl rollout status deployment/todo-backend -n todo --timeout=120s\n+ aws s3 cp build/report.html s3://todo-reports/dev/report.html",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`echo $*` style dry runs that lose quotes: the printed command looks fine, but the real one breaks on spaces. The real run uses `\"$@\"`."
+      ],
+      "interview_say": "My deploy scripts check that tools exist, use the git commit as the image tag, wait for `kubectl rollout status`, and support a `DRY_RUN` mode that prints every command instead of running it.",
+      "try_yourself": "Run the same lines with `DRY_RUN=0` and the mocks in PATH (`export PATH=\"$PWD/mockbin:$PATH\"`). Which mock answers?",
+      "table": {
+        "head": [
+          "Task",
+          "Pattern"
+        ],
+        "rows": [
+          [
+            "tool installed?",
+            "`command -v kubectl >/dev/null || { echo 'kubectl missing' >&2; exit 1; }`"
+          ],
+          [
+            "image tag",
+            "`git describe --tags --always` or `git rev-parse --short HEAD`"
+          ],
+          [
+            "wait for rollout",
+            "`kubectl rollout status deploy/X --timeout=120s` (non-zero on failure)"
+          ],
+          [
+            "roll back",
+            "`kubectl rollout undo deploy/X`"
+          ],
+          [
+            "AWS identity check",
+            "`aws sts get-caller-identity` before changing anything"
+          ],
+          [
+            "JSON from AWS",
+            "`aws ec2 describe-instances --output json | jq ...` or `--query`"
+          ],
+          [
+            "docker disk use",
+            "`docker system df`, then `docker image prune -f`"
+          ]
+        ]
+      }
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you read a value from a JSON API response in bash?",
+      "a": "With jq: `curl -fsS URL | jq -r '.items[0].name'`. `-r` gives raw text; `select()` filters; `--arg` passes bash values in.",
+      "topic": "DevOps tools"
+    },
+    {
+      "q": "How do you find Kubernetes pods that are not healthy?",
+      "a": "`kubectl get pods -o json | jq` and check phase, ready and restartCount; or `kubectl get pods --field-selector=status.phase!=Running`. Then `kubectl describe pod` and `kubectl logs --previous`.",
+      "topic": "DevOps tools"
+    },
+    {
+      "q": "How do you handle secrets in shell scripts?",
+      "a": "Take them from CI secrets or a 600 env file, never hard-code or echo them, mask them in output, avoid `set -x` around them, and keep `.env` in `.gitignore`.",
+      "topic": "DevOps tools"
+    },
+    {
+      "q": "How do you change an nginx config safely?",
+      "a": "Back up the old file, put the new one in place, run `nginx -t`, and reload only if the test passes; otherwise restore the backup.",
+      "topic": "DevOps tools"
+    },
+    {
+      "q": "What does `terraform plan -detailed-exitcode` return?",
+      "a": "0 = no changes, 1 = error, 2 = there are changes. CI scripts must not treat 2 as a failure.",
+      "topic": "DevOps tools"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "jq -r '.[].field'",
+      "meaning": "Raw values from a JSON array",
+      "example": "curl -fsS URL | jq -r '.[].tag_name'",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "jq 'select(.x == y)'",
+      "meaning": "Filter JSON items",
+      "example": "jq '.[] | select(.prerelease == false)'",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "jq --arg v \"$X\"",
+      "meaning": "Pass a bash value into jq",
+      "example": "jq --arg t \"$TAG\" '.[] | select(.tag_name == $t)'",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "jq -r '... | @tsv'",
+      "meaning": "JSON to tab-separated lines",
+      "example": "kubectl get pods -o json | jq -r '.items[] | [.metadata.name, .status.phase] | @tsv'",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "jq '.x // \"default\"'",
+      "meaning": "Default for missing values",
+      "example": "jq -r '.state.waiting.reason // \"-\"'",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "set -a; source .env; set +a",
+      "meaning": "Load and export an env file",
+      "example": "set -a; source /etc/todo/.env; set +a",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "${SECRET:0:4}****",
+      "meaning": "Mask a secret in output",
+      "example": "echo \"token: ${TOKEN:0:4}****\"",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "nginx -t && systemctl reload nginx",
+      "meaning": "Test before reload",
+      "example": "sudo nginx -t && sudo systemctl reload nginx",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "docker system df / image prune",
+      "meaning": "Docker disk use and cleanup",
+      "example": "docker image prune -f",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "kubectl rollout status / undo",
+      "meaning": "Wait for / roll back a deploy",
+      "example": "kubectl rollout status deploy/todo-backend --timeout=120s",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "terraform plan -detailed-exitcode",
+      "meaning": "0 none, 1 error, 2 changes",
+      "example": "terraform plan -detailed-exitcode -out=tfplan || rc=$?",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "run() dry-run wrapper",
+      "meaning": "Print or run commands",
+      "example": "DRY_RUN=1 ./deploy.sh",
+      "topic": "DevOps tools"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "jq",
+      "problems": [
+        "d26p01",
+        "d26p02"
+      ]
+    },
+    {
+      "item": "curl to JSON APIs",
+      "problems": [
+        "d26p01"
+      ]
+    },
+    {
+      "item": "docker/kubectl/aws/git/terraform patterns (mocks, dry-run)",
+      "problems": [
+        "d26p02",
+        "d26p05",
+        "d26p06",
+        "d26p07"
+      ]
+    },
+    {
+      "item": "Env files and secrets handling",
+      "problems": [
+        "d26p03"
+      ]
+    },
+    {
+      "item": "nginx -t then reload",
+      "problems": [
+        "d26p04"
+      ]
+    },
+    {
+      "item": "Cleanup of old Docker images (dry-run)",
+      "problems": [
+        "d26p05"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day26"
+}

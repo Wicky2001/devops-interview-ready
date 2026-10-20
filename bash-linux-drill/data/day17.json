@@ -1,0 +1,707 @@
+{
+  "day": 17,
+  "week": 3,
+  "title": "Disk, memory and performance",
+  "goal": "Find what fills the disk, tell space problems from inode problems, read memory and load numbers, and fix the classic \"deleted but still open\" file.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day17 && cd ~/bash-practice/day17",
+    "# P1: a training server folder (about 47 MB of real data)",
+    "mkdir -p server/model-checkpoints server/logs server/cache/pip server/datasets",
+    "for e in 1 2 3; do head -c 10485760 /dev/zero > server/model-checkpoints/epoch-$e.pt; done",
+    "head -c 4194304 /dev/zero > server/logs/train.log",
+    "head -c 1048576 /dev/zero > server/logs/worker.log",
+    "head -c 12582912 /dev/zero > server/cache/pip/torch.whl",
+    "echo 'id,label' > server/datasets/small.csv",
+    "# P2/P5: df snapshots from a production server",
+    "printf '%s\\n' 'Filesystem     1024-blocks      Used Available Capacity Mounted on' '/dev/nvme0n1p1    51474912  47105112   4353416      92% /' '/dev/nvme1n1     103081248  41232499  56589645      43% /var' '/dev/nvme2n1      20511312  18665294   1846018      91% /var/lib/docker' 'tmpfs              8124648         0   8124648       0% /dev/shm' > df-snapshot.txt",
+    "printf '%s\\n' 'Filesystem       Inodes   IUsed    IFree IUse% Mounted on' '/dev/nvme0n1p1  3276800  412339  2864461   13% /' '/dev/nvme1n1    6553600 6553600        0  100% /var' > df-inodes-snapshot.txt",
+    "printf '%s\\n' '               total        used        free      shared  buff/cache   available' 'Mem:           15890       11020         310         120        4560        4450' 'Swap:           2047        1800         247' > free-snapshot.txt",
+    "# P3: incident folder",
+    "mkdir -p incident",
+    "# P5: broken alert script (reads df -P output on stdin)",
+    "printf '%s\\n' '#!/bin/bash' '# Usage: df -P | disk-alert.sh [threshold]    (default threshold: 80)' '# Print ALERT for every filesystem with Use% >= threshold. Exit 1 if there was an alert, else exit 0.' 'LIMIT=$1' 'ALERTS=0' 'while read -r fs size used avail pct mount; do' '  if [ $pct -ge $LIMIT ]; then' '    echo \"ALERT $mount is at $pct\"' '    ALERTS=$((ALERTS + 1))' '  fi' 'done' '[ $ALERTS -gt 0 ] && exit 1' > disk-alert.sh",
+    "# P6: a practice copy of an fstab file (NOT your real /etc/fstab)",
+    "printf '%s\\n' '# <device>                                 <mount>   <type> <options>          <dump> <pass>' 'UUID=1f2e3d4c-aaaa-bbbb-cccc-123456789abc  /         ext4   defaults           0      1' 'UUID=9a8b7c6d-dddd-eeee-ffff-abcdefabcdef  /data     ext4   defaults,nofail    0      2' '/swapfile                                  none      swap   sw                 0      0' 'tmpfs                                      /tmp      tmpfs  defaults,size=2G   0      0' > fstab.copy",
+    "cd ~/bash-practice/day17"
+  ],
+  "warmup": [
+    {
+      "q": "Write a crontab line that runs `/opt/backup.sh` every day at 02:30.",
+      "a": "`30 2 * * * /opt/backup.sh >> /var/log/backup.log 2>&1`",
+      "from_day": 16
+    },
+    {
+      "q": "How do you see the logs of the systemd service `nginx` from the last hour?",
+      "a": "`journalctl -u nginx --since \"1 hour ago\"`",
+      "from_day": 16
+    },
+    {
+      "q": "Which command finds the 10 biggest numbers, biggest first?",
+      "a": "`sort -rn | head -n 10`",
+      "from_day": 12
+    },
+    {
+      "q": "What does `kill -0 PID` do?",
+      "a": "It sends no signal; it only checks that the process exists (exit code 0).",
+      "from_day": 15
+    }
+  ],
+  "problems": [
+    {
+      "id": "d17p01",
+      "title": "What is eating the disk? du and sort -h",
+      "type": "command",
+      "topic": "Disk",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The PyTorch training server's disk is 98% full and training has stopped. The user must find, in a few commands, which folders and files are the biggest, before deleting anything.",
+      "task": [
+        "Show the total size of `server` with `du -sh`.",
+        "Show the size of each folder directly inside `server`, smallest to biggest (`sort -h`).",
+        "Show the biggest folders two levels deep (`--max-depth=2`), only the last 4.",
+        "List files bigger than 5 MB with their sizes."
+      ],
+      "hints": [
+        "`-s` = summary (one total), `-h` = human sizes (K, M, G).",
+        "`du -sh server/* | sort -h` puts the biggest at the bottom.",
+        "`find server -type f -size +5M -exec du -h {} + | sort -h`."
+      ],
+      "solution": [
+        "du -sh server",
+        "echo \"=== per folder ===\"",
+        "du -sh server/* | sort -h",
+        "echo \"=== two levels, biggest 4 ===\"",
+        "du -h --max-depth=2 server | sort -h | tail -n 4",
+        "echo \"=== files over 5 MB ===\"",
+        "find server -type f -size +5M -exec du -h {} + | sort -h"
+      ],
+      "explanation": [
+        {
+          "part": "du -sh DIR",
+          "meaning": "Disk usage, summary, human units."
+        },
+        {
+          "part": "du -sh server/* | sort -h",
+          "meaning": "One line per folder, sorted by human size (K < M < G)."
+        },
+        {
+          "part": "--max-depth=2",
+          "meaning": "Show folders down to 2 levels (on a real server: `du -xh --max-depth=1 / | sort -h`)."
+        },
+        {
+          "part": "-x",
+          "meaning": "Stay on one filesystem: do not count `/proc` or other disks."
+        },
+        {
+          "part": "find -size +5M -exec du -h {} +",
+          "meaning": "Find big files and show their size (Day 12)."
+        }
+      ],
+      "expected_output": "48M\tserver\n=== per folder ===\n8.0K\tserver/datasets\n5.1M\tserver/logs\n13M\tserver/cache\n31M\tserver/model-checkpoints\n=== two levels, biggest 4 ===\n13M\tserver/cache\n13M\tserver/cache/pip\n31M\tserver/model-checkpoints\n48M\tserver\n=== files over 5 MB ===\n10M\tserver/model-checkpoints/epoch-1.pt\n10M\tserver/model-checkpoints/epoch-2.pt\n10M\tserver/model-checkpoints/epoch-3.pt\n12M\tserver/cache/pip/torch.whl",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "The setup created about 47 MB of real files. Run `rm -rf ~/bash-practice/day17` (Reset) when the day is done.",
+      "verified": true,
+      "mistakes": [
+        "Running `du -sh /` as a normal user: hundreds of `Permission denied` lines. Use `sudo du -xh --max-depth=1 / 2>/dev/null | sort -h`.",
+        "Using `sort -n` on `du -h` output: `12M` and `4.0K` are sorted wrong. Use `sort -h`.",
+        "Deleting files under `/var/lib/docker` by hand. Use `docker system df` and `docker system prune` (Day 26)."
+      ],
+      "interview_say": "When a disk is full I run `df -h` to see which filesystem, then `du -xh --max-depth=1 /path | sort -h` again and again to walk down to the biggest folder, and `find -size +1G` for big files.",
+      "try_yourself": "Run `du -sh ~/.cache 2>/dev/null` and `du -sh ~/bash-practice` on your WSL. Which is bigger?"
+    },
+    {
+      "id": "d17p02",
+      "title": "df -h vs df -i: no space, or no inodes?",
+      "type": "command",
+      "topic": "Disk",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The app on `/var` fails with `No space left on device`, but `df -h` says `/var` is only 43% full. Every file also needs an inode (a small record with its owner, size and place). If millions of tiny files use all inodes, no new file can be created.",
+      "task": [
+        "Run `df -h /` and `df -i /` on your machine and read the columns.",
+        "From `df-snapshot.txt`, print every filesystem at 90% or more.",
+        "From `df-inodes-snapshot.txt`, print every filesystem with inode use at 90% or more.",
+        "Write down: which mount has a space problem, and which has an inode problem?"
+      ],
+      "hints": [
+        "`df -h` = space in human units. `df -i` = inodes.",
+        "`$5+0` in awk turns `92%` into the number 92.",
+        "To find the folder with many files: `find /var -xdev -type f | cut -d/ -f2-3 | sort | uniq -c | sort -rn | head`."
+      ],
+      "solution": [
+        "df -h / | tail -n 1 | awk '{print \"this machine: / is\", $5, \"full\"}'",
+        "df -i / | tail -n 1 | awk '{print \"this machine: / uses\", $5, \"of its inodes\"}'",
+        "echo \"=== space >= 90% (snapshot) ===\"",
+        "awk 'NR > 1 && $5+0 >= 90 {print $6, $5}' df-snapshot.txt",
+        "echo \"=== inodes >= 90% (snapshot) ===\"",
+        "awk 'NR > 1 && $5+0 >= 90 {print $6, $5}' df-inodes-snapshot.txt"
+      ],
+      "explanation": [
+        {
+          "part": "df -h",
+          "meaning": "Size, Used, Avail, Use% per filesystem, in human units."
+        },
+        {
+          "part": "df -i",
+          "meaning": "Inodes, IUsed, IFree, IUse% per filesystem."
+        },
+        {
+          "part": "$5+0 >= 90",
+          "meaning": "Make awk read `92%` as the number 92."
+        },
+        {
+          "part": "inode",
+          "meaning": "A record for one file. A filesystem has a fixed number. Full inodes = `No space left on device` even with free GB."
+        }
+      ],
+      "expected_output": "this machine: / is 24% full\nthis machine: / uses 2% of its inodes\n=== space >= 90% (snapshot) ===\n/ 92%\n/var/lib/docker 91%\n=== inodes >= 90% (snapshot) ===\n/var 100%",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The first two lines show the user's own machine, so the numbers are different. The snapshot lines are fixed.",
+      "verified": true,
+      "mistakes": [
+        "Checking only `df -h`. Always check `df -i` too after `No space left on device`.",
+        "Deleting one big file to fix an inode problem. The fix is to delete many small files (old sessions, cache files, mail queue)."
+      ],
+      "interview_say": "`No space left on device` can mean no free blocks or no free inodes. I check both `df -h` and `df -i`; for inodes I look for folders with millions of small files.",
+      "try_yourself": "Create 1000 empty files with `mkdir many && touch many/f{1..1000}` and compare `df -i .` before and after."
+    },
+    {
+      "id": "d17p03",
+      "title": "Incident: disk full, but du finds nothing",
+      "type": "incident",
+      "topic": "Disk",
+      "minutes": 14,
+      "optional": false,
+      "core": true,
+      "workdir": "incident",
+      "situation": "The backend log grew to many GB. Someone ran `rm app.log` to free space. `df` still shows the disk as full, and `du` shows a tiny folder. The reason: the running app still has the deleted file open, so Linux cannot free the space yet.",
+      "task": [
+        "In `incident`, start a fake app that keeps `app.log` open and writes to it (see the solution, first lines).",
+        "Make the log big (20 MB) and check `du -sh .`.",
+        "Delete the file with `rm app.log`. Check `du -sh .` again.",
+        "Prove the file is still open: look at `/proc/<PID>/fd` and use `lsof`.",
+        "Free the space for real: stop (or restart) the app."
+      ],
+      "hints": [
+        "A file's space is freed only when no name points to it AND no process has it open.",
+        "`ls -l /proc/PID/fd` shows `(deleted)` next to such files. `lsof +L1` lists open files with no name left.",
+        "Fix: restart the app, or empty the file through the open handle: `: > /proc/PID/fd/3`."
+      ],
+      "solution": [
+        "bash -c 'exec 3>> app.log; while :; do echo \"log line\" >&3; sleep 0.1; done' &",
+        "APP=$!",
+        "sleep 0.3",
+        "head -c 20000000 /dev/zero >> app.log        # pretend the log is huge",
+        "du -sh .",
+        "rm app.log                                   # \"free\" the space",
+        "du -sh .                                     # du sees no file...",
+        "ls -l /proc/$APP/fd | grep -c '(deleted)'    # ...but the app still has it open",
+        "readlink /proc/$APP/fd/3",
+        "lsof -p $APP 2>/dev/null | grep -c '(deleted)'",
+        "kill $APP                                    # restart / stop the app",
+        "wait $APP 2>/dev/null",
+        "kill -0 $APP 2>/dev/null || echo \"app stopped: the kernel can free the space now\""
+      ],
+      "explanation": [
+        {
+          "part": "exec 3>> app.log",
+          "meaning": "The fake app opens the file as file descriptor 3 and keeps it open."
+        },
+        {
+          "part": "rm app.log",
+          "meaning": "Removes only the name. The data stays while a process has it open."
+        },
+        {
+          "part": "du vs df",
+          "meaning": "`du` adds up files it can see by name. `df` asks the filesystem. A deleted-but-open file is counted by df only."
+        },
+        {
+          "part": "/proc/PID/fd + (deleted)",
+          "meaning": "Each open file is a link here. Deleted ones are marked `(deleted)`."
+        },
+        {
+          "part": "lsof",
+          "meaning": "List open files. `lsof +L1` = open files with 0 links (deleted). Often needs sudo for other users' processes."
+        },
+        {
+          "part": "kill / restart",
+          "meaning": "When the process closes the file, the space is freed."
+        }
+      ],
+      "expected_output": "20M\t.\n4.0K\t.\n1\n/home/wicky/bash-practice/day17/incident/app.log (deleted)\n1\napp stopped: the kernel can free the space now",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Deleting a live log with `rm` to free space. Empty it instead: `: > app.log` (or `truncate -s 0 app.log`). The app keeps writing, and the space is freed.",
+        "Rebooting the server for this. Restarting only the app that holds the file is enough."
+      ],
+      "interview_say": "If `df` says full but `du` cannot find the files, a process is probably holding a deleted file open. I find it with `lsof +L1`, then restart that service or truncate the file through `/proc/PID/fd`.",
+      "try_yourself": "Repeat the steps, but instead of `kill`, run `: > /proc/$APP/fd/3`. Is the app still running? Is the space freed?"
+    },
+    {
+      "id": "d17p04",
+      "title": "Memory and load: free, uptime, nproc, vmstat",
+      "type": "command",
+      "topic": "Disk",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The API feels slow. The user checks the numbers an interviewer asks about: how much memory is really available, how busy the CPUs are (load average), and whether the server is swapping.",
+      "task": [
+        "Run `free -m`. Then read `free-snapshot.txt`: is that server short of memory?",
+        "Print the available memory in MB from `/proc/meminfo`.",
+        "Print the load average and the number of CPUs (`uptime`, `nproc`).",
+        "Run `vmstat 1 3` and look at the `si`/`so` (swap) and `wa` (I/O wait) columns."
+      ],
+      "hints": [
+        "Look at `available`, not `free`. Linux uses free RAM as disk cache (`buff/cache`) and gives it back when needed.",
+        "Load average = 3 numbers: last 1, 5 and 15 minutes. Compare them with `nproc`.",
+        "Swap used + `si`/`so` not zero = the server is swapping, which is very slow."
+      ],
+      "solution": [
+        "free -m",
+        "echo \"=== snapshot from the slow server ===\"",
+        "awk '/^Mem:/ {printf \"available: %d MB of %d MB (%.0f%%)\\n\", $7, $2, $7 * 100 / $2}",
+        "     /^Swap:/ {printf \"swap used: %d MB of %d MB\\n\", $3, $2}' free-snapshot.txt",
+        "echo \"=== this machine ===\"",
+        "awk '/MemAvailable/ {printf \"MemAvailable: %d MB\\n\", $2 / 1024}' /proc/meminfo",
+        "echo \"load average: $(cut -d' ' -f1-3 /proc/loadavg), CPUs: $(nproc)\"",
+        "vmstat 1 3"
+      ],
+      "explanation": [
+        {
+          "part": "free -m",
+          "meaning": "Memory in MB: total, used, free, shared, buff/cache, available."
+        },
+        {
+          "part": "available",
+          "meaning": "How much RAM new programs can get without swapping. The number that matters."
+        },
+        {
+          "part": "buff/cache",
+          "meaning": "Disk cache. Not wasted: it is released when programs need RAM."
+        },
+        {
+          "part": "load average",
+          "meaning": "Average number of processes running or waiting. Load 4 on 4 CPUs = full; 8 on 4 CPUs = overloaded."
+        },
+        {
+          "part": "vmstat 1 3",
+          "meaning": "3 samples, 1 second apart. `r` waiting to run, `si/so` swap in/out, `wa` waiting for disk."
+        }
+      ],
+      "expected_output": "               total        used        free      shared  buff/cache   available\nMem:           16093         526       15193          14         598       15566\nSwap:              0           0           0\n=== snapshot from the slow server ===\navailable: 4450 MB of 15890 MB (28%)\nswap used: 1800 MB of 2047 MB\n=== this machine ===\nMemAvailable: 15566 MB\nload average: 0.13 0.06 0.01, CPUs: 4\nprocs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------\n r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu\n 0  0      0 15558396   3316 609264    0    0   267    37  340    0  1  0 98  0  0  0\n 0  0      0 15558244   3316 609704    0    0     0     0  277  253  0  0 99  0  0  0\n 0  0      0 15558244   3316 609704    0    0     0     0  186  174  0  0 100  0  0  0",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The memory, load and vmstat numbers on the user's machine are different. Only the snapshot lines are fixed.",
+      "verified": true,
+      "mistakes": [
+        "Panicking because `free` is small. With 4.5 GB `available`, the server is fine; the cache used the rest.",
+        "Comparing load average with 1 on a multi-core server. Always divide by `nproc`."
+      ],
+      "interview_say": "I look at `available` in `free -m`, not `free`. The load average means something only compared with the CPU count from `nproc`. If swap is used and `vmstat` shows `si`/`so`, the server is short of memory.",
+      "try_yourself": "Run `top`, press `1` to see each CPU, and `M` to sort by memory. Quit with `q`."
+    },
+    {
+      "id": "d17p05",
+      "title": "Find the bug: the disk alert script",
+      "type": "fix-bug",
+      "topic": "Disk",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`disk-alert.sh` reads `df -P` output and should alert for full filesystems. It is tested with the saved snapshot. It prints errors, and it exits with 1 even when nothing is full, so the monitoring always shows red.",
+      "task": [
+        "Run `bash disk-alert.sh 90 < df-snapshot.txt` and `bash disk-alert.sh < df-snapshot.txt`. Read the errors.",
+        "Run `bash disk-alert.sh 99 < df-snapshot.txt; echo $?`. Nothing is at 99%, but what is the exit code?",
+        "Find 4 bugs: the header line, the `%` sign, the missing default, and the last line.",
+        "Fix them and test with 90 and 99 again."
+      ],
+      "hints": [
+        "The header has `Capacity` in the pct column: skip lines where pct is not a number.",
+        "Remove the `%`: `pct=${pct%\\%}`. Default: `LIMIT=${1:-80}`.",
+        "`[ 0 -gt 0 ] && exit 1` is false, so the script ends with that false test: exit code 1. Add `exit 0` at the end, or use `if`."
+      ],
+      "solution": [
+        "bash disk-alert.sh 90 < df-snapshot.txt",
+        "bash disk-alert.sh 99 < df-snapshot.txt; echo \"exit code with 99: $?\"",
+        "cat > disk-alert.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: df -P | disk-alert.sh [threshold]    (default threshold: 80)",
+        "# Print ALERT for every filesystem with Use% >= threshold. Exit 1 if there was an alert, else exit 0.",
+        "LIMIT=${1:-80}",
+        "ALERTS=0",
+        "while read -r fs size used avail pct mount; do",
+        "  pct=${pct%\\%}                              # 92% -> 92",
+        "  [[ $pct =~ ^[0-9]+$ ]] || continue         # skip the header line",
+        "  if [ \"$pct\" -ge \"$LIMIT\" ]; then",
+        "    echo \"ALERT $mount is at $pct%\"",
+        "    ALERTS=$((ALERTS + 1))",
+        "  fi",
+        "done",
+        "if [ \"$ALERTS\" -gt 0 ]; then exit 1; fi",
+        "exit 0",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "bash disk-alert.sh 90 < df-snapshot.txt; echo \"exit code with 90: $?\"",
+        "bash disk-alert.sh 99 < df-snapshot.txt; echo \"exit code with 99: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "header line",
+          "meaning": "Bug 1: `pct` was `Capacity`: `integer expression expected`. Skip non-numbers."
+        },
+        {
+          "part": "${pct%\\%}",
+          "meaning": "Bug 2: remove the `%` at the end so the test gets a number."
+        },
+        {
+          "part": "${1:-80}",
+          "meaning": "Bug 3: without a threshold, `[ 92 -ge ]` failed."
+        },
+        {
+          "part": "exit 0 at the end",
+          "meaning": "Bug 4: a script's exit code is the last command's. The false `[ ... ] && exit 1` made it 1."
+        },
+        {
+          "part": "< df-snapshot.txt",
+          "meaning": "Reading from stdin makes the script easy to test with saved data. Live use: `df -P | ./disk-alert.sh 90`."
+        }
+      ],
+      "expected_output": "disk-alert.sh: line 7: [: Capacity: integer expression expected\ndisk-alert.sh: line 7: [: 92%: integer expression expected\ndisk-alert.sh: line 7: [: 43%: integer expression expected\ndisk-alert.sh: line 7: [: 91%: integer expression expected\ndisk-alert.sh: line 7: [: 0%: integer expression expected\ndisk-alert.sh: line 7: [: Capacity: integer expression expected\ndisk-alert.sh: line 7: [: 92%: integer expression expected\ndisk-alert.sh: line 7: [: 43%: integer expression expected\ndisk-alert.sh: line 7: [: 91%: integer expression expected\ndisk-alert.sh: line 7: [: 0%: integer expression expected\nexit code with 99: 1\n--- fixed ---\nALERT / is at 92%\nALERT /var/lib/docker is at 91%\nexit code with 90: 1\nexit code with 99: 0",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`cmd && exit 1` as the last line of a script: when `cmd` is false, the script exits 1. Use `if ...; then exit 1; fi`.",
+        "Using `df -h` in scripts: units change (G, T) and long device names can wrap lines. Use `df -P` (POSIX format)."
+      ],
+      "checks": [
+        {
+          "run": "bash disk-alert.sh 90 < df-snapshot.txt",
+          "expect": "integer expression expected"
+        }
+      ],
+      "interview_say": "In monitoring scripts I parse `df -P`, skip the header, strip the percent sign, give thresholds defaults, and make sure the exit code is 0 when everything is fine. I test with saved output on stdin.",
+      "try_yourself": "Run the fixed script on your real machine: `df -P | bash disk-alert.sh 1`. Every filesystem should alert."
+    },
+    {
+      "id": "d17p06",
+      "title": "lsblk, findmnt and /etc/fstab (read only)",
+      "type": "concept",
+      "topic": "Disk",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A new EBS data disk was attached to the server and must be mounted at `/data` after every reboot. The user reads the disks with `lsblk`, the mounts with `findmnt`, and the fstab format with a practice copy. The real `/etc/fstab` is NOT changed: a wrong line can stop the server from booting.",
+      "task": [
+        "Run `lsblk` and `findmnt -n -o SOURCE,FSTYPE /` on your machine (read only).",
+        "Read `fstab.copy`. Print each line without comments as `mount point -> type (options)`.",
+        "Find the line that will not stop the boot if the disk is missing (`nofail`)."
+      ],
+      "hints": [
+        "fstab columns: device, mount point, type, options, dump, pass.",
+        "`grep -v '^#' fstab.copy | awk '{print $2, \"->\", $3, \"(\" $4 \")\"}'`",
+        "On a real server, test a new fstab line with `sudo mount -a` before rebooting."
+      ],
+      "solution": [
+        "lsblk -d -o NAME,SIZE,TYPE | head -n 3",
+        "findmnt -n -o FSTYPE /",
+        "echo \"=== fstab.copy ===\"",
+        "grep -v '^#' fstab.copy | awk '{print $2, \"->\", $3, \"(\" $4 \")\"}'",
+        "echo \"=== safe if missing ===\"",
+        "grep nofail fstab.copy | awk '{print $2}'"
+      ],
+      "explanation": [
+        {
+          "part": "lsblk",
+          "meaning": "List block devices (disks, partitions) as a tree."
+        },
+        {
+          "part": "findmnt",
+          "meaning": "Show what is mounted where, with type and options. `mount` shows the same in a long list."
+        },
+        {
+          "part": "UUID=...",
+          "meaning": "Use the disk's UUID (from `blkid`), not `/dev/nvme1n1`: device names can change after reboot."
+        },
+        {
+          "part": "nofail",
+          "meaning": "Do not stop the boot if this disk is missing. Important for cloud data disks."
+        },
+        {
+          "part": "pass 1 / 2 / 0",
+          "meaning": "fsck order at boot: 1 for `/`, 2 for others, 0 = skip."
+        }
+      ],
+      "expected_output": "NAME    SIZE TYPE\nzram0     0B disk\nvda     256G disk\next4\n=== fstab.copy ===\n/ -> ext4 (defaults)\n/data -> ext4 (defaults,nofail)\nnone -> swap (sw)\n/tmp -> tmpfs (defaults,size=2G)\n=== safe if missing ===\n/data",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The `lsblk` and `findmnt` lines show the user's own machine. The fstab lines are from the practice copy.",
+      "verified": true,
+      "mistakes": [
+        "Editing the real `/etc/fstab` and rebooting without `sudo mount -a`: a typo can drop the server into emergency mode.",
+        "Using `/dev/sdb` in fstab on a cloud VM: after a reboot the name can change and the wrong disk is mounted."
+      ],
+      "interview_say": "To add a disk I find it with `lsblk`, format it, mount it, then add a UUID-based line with `nofail` to `/etc/fstab` and test with `mount -a` before any reboot.",
+      "try_yourself": "Run `cat /etc/fstab` on WSL (read only). What do you see there?"
+    },
+    {
+      "id": "d17p07",
+      "title": "ulimit and \"Too many open files\"",
+      "type": "explain-error",
+      "topic": "Disk",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Under load, the Spring Boot backend logs `java.io.IOException: Too many open files`. Each process has a limit on open files (sockets count too). The user shows the limit and makes the error happen safely in a subshell.",
+      "task": [
+        "Print the open-files limit with `ulimit -n`, and a few other limits with `ulimit -a | head -n 5`.",
+        "In a subshell `( ... )`, set `ulimit -n 20` and open files until it fails.",
+        "Read the error. Then check the limit outside the subshell: it did not change."
+      ],
+      "hints": [
+        "`exec {fd}>/dev/null` opens a new file descriptor and saves its number in `fd`.",
+        "The limit in a subshell does not change the main shell.",
+        "For services, set `LimitNOFILE=65536` in the systemd unit, or use `/etc/security/limits.conf` for users."
+      ],
+      "solution": [
+        "echo \"open files limit: $(ulimit -n)\"",
+        "ulimit -a | head -n 5",
+        "(",
+        "  ulimit -n 20",
+        "  for i in $(seq 1 30); do",
+        "    exec {fd}>/dev/null || { echo \"could not open more files\"; break; }",
+        "  done",
+        ")",
+        "echo \"limit outside the subshell: $(ulimit -n)\""
+      ],
+      "explanation": [
+        {
+          "part": "ulimit -n",
+          "meaning": "Maximum number of open file descriptors for this shell and its children."
+        },
+        {
+          "part": "exec {fd}>/dev/null",
+          "meaning": "Open one more file descriptor (bash 4.1+)."
+        },
+        {
+          "part": "Too many open files",
+          "meaning": "The process reached its limit. New files and network connections fail."
+        },
+        {
+          "part": "LimitNOFILE=",
+          "meaning": "systemd setting for a service. Docker: `--ulimit nofile=65536:65536`."
+        }
+      ],
+      "expected_output": "open files limit: 20000\nreal-time non-blocking time  (microseconds, -R) unlimited\ncore file size              (blocks, -c) 0\ndata seg size               (kbytes, -d) unlimited\nscheduling priority                 (-e) 0\nfile size                   (blocks, -f) unlimited\nbash: redirection error: cannot duplicate fd: Too many open files\nbash: /dev/null: Too many open files\ncould not open more files\nlimit outside the subshell: 20000",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The limits on the user's machine can be different (WSL often shows 1024 for `ulimit -n`).",
+      "verified": true,
+      "mistakes": [
+        "Raising the limit when the real problem is a leak (the app never closes connections). Check with `ls /proc/PID/fd | wc -l` over time.",
+        "Setting `ulimit -n` in `.bashrc` for a service: services do not read `.bashrc`. Use the unit file."
+      ],
+      "checks": [
+        {
+          "run": "( ulimit -n 20; for i in $(seq 1 30); do exec {fd}>/dev/null || break; done )",
+          "expect": "Too many open files"
+        }
+      ],
+      "interview_say": "`Too many open files` means the process hit its file descriptor limit. I check `ulimit -n` and `/proc/PID/fd`, look for leaks, and raise `LimitNOFILE` in the systemd unit if the load is real.",
+      "try_yourself": "Run `ls /proc/$$/fd | wc -l` to count the open files of your own shell."
+    }
+  ],
+  "interview": [
+    {
+      "q": "The disk is full. What do you do first?",
+      "a": "`df -h` to find which filesystem, `df -i` for inodes, then `du -xh --max-depth=1 /path | sort -h` to walk down to the biggest folders. Delete or compress safely; check for deleted-but-open files with `lsof +L1`.",
+      "topic": "Disk"
+    },
+    {
+      "q": "What is the difference between `du` and `df`?",
+      "a": "`du` adds up the sizes of files it can find by name. `df` shows the free and used space the filesystem reports. They differ when deleted files are still open.",
+      "topic": "Disk"
+    },
+    {
+      "q": "What is an inode?",
+      "a": "A record for each file with its owner, permissions, size and data location. When all inodes are used, no new files can be created, even with free space.",
+      "topic": "Disk"
+    },
+    {
+      "q": "In `free -m`, which column tells you if the server is short of memory?",
+      "a": "`available`. `free` is small on healthy servers because Linux uses spare RAM as cache.",
+      "topic": "Disk"
+    },
+    {
+      "q": "What does load average mean?",
+      "a": "The average number of processes running or waiting for CPU (or disk) over 1, 5 and 15 minutes. Compare it with the number of CPUs from `nproc`.",
+      "topic": "Disk"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "df -h / df -i",
+      "meaning": "Space / inodes per filesystem",
+      "example": "df -h /var",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "du -sh DIR",
+      "meaning": "Total size of a folder",
+      "example": "du -sh /var/log",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "du -xh --max-depth=1 | sort -h",
+      "meaning": "Biggest sub-folders last",
+      "example": "sudo du -xh --max-depth=1 / | sort -h",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "find -size +1G",
+      "meaning": "Find big files",
+      "example": "sudo find / -xdev -size +1G",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "lsof +L1",
+      "meaning": "Deleted files still open",
+      "example": "sudo lsof +L1",
+      "topic": "Disk"
+    },
+    {
+      "cmd": ": > file",
+      "meaning": "Empty a live log safely",
+      "example": ": > /var/log/app/app.log",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "free -m",
+      "meaning": "Memory in MB (look at available)",
+      "example": "free -m",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "uptime / nproc",
+      "meaning": "Load average / CPU count",
+      "example": "uptime; nproc",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "vmstat 1 5",
+      "meaning": "CPU, memory, swap, I/O every second",
+      "example": "vmstat 1 5",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "lsblk / findmnt / mount",
+      "meaning": "Disks / mounts",
+      "example": "lsblk -f",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "/etc/fstab",
+      "meaning": "Mounts at boot (test with mount -a)",
+      "example": "sudo mount -a",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "ulimit -n",
+      "meaning": "Open files limit",
+      "example": "ulimit -n",
+      "topic": "Disk"
+    },
+    {
+      "cmd": "df -P",
+      "meaning": "Stable df format for scripts",
+      "example": "df -P | awk 'NR>1 {print $5, $6}'",
+      "topic": "Disk"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "df -h",
+      "problems": [
+        "d17p02",
+        "d17p05"
+      ]
+    },
+    {
+      "item": "du -sh, du | sort -h",
+      "problems": [
+        "d17p01",
+        "d17p03"
+      ]
+    },
+    {
+      "item": "free -m",
+      "problems": [
+        "d17p04"
+      ]
+    },
+    {
+      "item": "lsblk, mount",
+      "problems": [
+        "d17p06"
+      ]
+    },
+    {
+      "item": "/etc/fstab (read-only)",
+      "problems": [
+        "d17p06"
+      ]
+    },
+    {
+      "item": "Inodes (df -i)",
+      "problems": [
+        "d17p02"
+      ]
+    },
+    {
+      "item": "lsof",
+      "problems": [
+        "d17p03"
+      ]
+    },
+    {
+      "item": "vmstat",
+      "problems": [
+        "d17p04"
+      ]
+    },
+    {
+      "item": "uptime / load average",
+      "problems": [
+        "d17p04"
+      ]
+    },
+    {
+      "item": "ulimit",
+      "problems": [
+        "d17p07"
+      ]
+    },
+    {
+      "item": "Finding what eats the disk",
+      "problems": [
+        "d17p01",
+        "d17p03"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day17"
+}

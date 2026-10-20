@@ -1,0 +1,741 @@
+{
+  "day": 9,
+  "week": 2,
+  "title": "Functions and script arguments",
+  "goal": "Write reusable functions that return data the right way, and scripts that accept options, check input and print a clear usage message.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day09 && cd ~/bash-practice/day09",
+    "# P5: files of known size, one name with a space",
+    "head -c 307200 /dev/zero > big.log",
+    "head -c 5120 /dev/zero > small.log",
+    "head -c 2048 /dev/zero > \"my notes.txt\"",
+    "printf '%s\\n' '#!/bin/bash' '# Print the size in KB of each file given as an argument, then the total.' 'total=0' 'to_kb() {' '  size=$(stat -c %s \"$1\")' '  return $(( size / 1024 ))' '}' 'for f in $*; do' '  to_kb \"$f\"' '  kb=$?' '  echo \"$f: $kb KB\"' '  total=$((total + kb))' 'done' 'echo \"total: $total KB\"' > sizes.sh",
+    "# P7: a small helper library",
+    "printf '%s\\n' '# helpers.sh - shared functions. Load with: source helpers.sh' 'log()  { echo \"[$(date +%H:%M:%S)] INFO  $*\"; }' 'warn() { echo \"[$(date +%H:%M:%S)] WARN  $*\" >&2; }' 'die()  { echo \"[$(date +%H:%M:%S)] ERROR $*\" >&2; exit 1; }' > helpers.sh",
+    "cd ~/bash-practice/day09"
+  ],
+  "warmup": [
+    {
+      "q": "Why does `cat file | while read x; do n=$((n+1)); done; echo $n` print an empty or 0 value?",
+      "a": "The pipe runs the loop in a subshell. Use `while ...; done < file` instead.",
+      "from_day": 8
+    },
+    {
+      "q": "How do you get the number of items in the array `IMAGES`?",
+      "a": "`${#IMAGES[@]}`",
+      "from_day": 8
+    },
+    {
+      "q": "What does `${1:-0}` mean?",
+      "a": "Use the first argument, or `0` if it is empty or missing.",
+      "from_day": 6
+    },
+    {
+      "q": "Single or double quotes for `echo \"Hello $USER\"`, and why?",
+      "a": "Double quotes, so `$USER` is replaced. Single quotes would print `$USER` literally.",
+      "from_day": 5
+    }
+  ],
+  "problems": [
+    {
+      "id": "d09p01",
+      "title": "return vs echo: get a value out of a function",
+      "type": "explain-error",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "A teammate wrote `get_port() { return 8080; }` and the script tries to connect to port 144. Interviewers love this one: in bash, `return` gives only an exit code (0-255). Real data must be printed with `echo` and caught with `$( )`.",
+      "task": [
+        "Define `get_port() { return 8080; }`. Call it, then print `$?`. What number do you get?",
+        "Define `get_port() { echo 8080; }`. Save the result with `PORT=$(get_port)` and print it.",
+        "Write `is_port_open()` that uses `return 0` or `return 1`, and use it in an `if`.",
+        "Explain in one sentence when to use `return` and when to use `echo`."
+      ],
+      "hints": [
+        "Exit codes are 8 bits: 8080 is taken modulo 256.",
+        "Data = `echo` + `$(func)`. Success or failure = `return 0` / `return 1` + `if func`.",
+        "`8080 % 256` = 144."
+      ],
+      "solution": [
+        "get_port() { return 8080; }          # WRONG: return is only an exit code",
+        "get_port; echo \"return gave: $?\"",
+        "get_port() { echo 8080; }            # RIGHT: print the data",
+        "PORT=$(get_port)",
+        "echo \"echo gave: $PORT\"",
+        "is_port_open() {                     # return = yes/no answer",
+        "  local port=$1",
+        "  [ \"$port\" -eq 8080 ] && return 0",
+        "  return 1",
+        "}",
+        "if is_port_open \"$PORT\"; then echo \"port $PORT is open\"; fi",
+        "is_port_open 22 || echo \"port 22 is closed\""
+      ],
+      "explanation": [
+        {
+          "part": "return N",
+          "meaning": "Ends the function with exit code N (0-255). Read it with `$?` or use the function in `if`."
+        },
+        {
+          "part": "8080 → 144",
+          "meaning": "8080 modulo 256 = 144. The value is silently wrong."
+        },
+        {
+          "part": "echo + $(func)",
+          "meaning": "The function prints the data; `$( )` catches the output into a variable."
+        },
+        {
+          "part": "if is_port_open",
+          "meaning": "`if` looks at the exit code: 0 = true."
+        },
+        {
+          "part": "local port=$1",
+          "meaning": "A variable only for this function. Inside a function, `$1` is the function's first argument."
+        }
+      ],
+      "expected_output": "return gave: 144\necho gave: 8080\nport 8080 is open\nport 22 is closed",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`return \"todo-api\"` gives `return: todo-api: numeric argument required`.",
+        "Printing debug messages with `echo` inside a function that returns data with `echo`: the debug text ends up in the variable. Send debug text to stderr: `echo \"debug\" >&2`."
+      ],
+      "checks": [
+        {
+          "run": "f() { return \"todo-api\"; }; f",
+          "expect": "return: todo-api: numeric argument required"
+        }
+      ],
+      "interview_say": "In bash, `return` only sets the exit code from 0 to 255, so I use it for success or failure. To return data, the function prints it with `echo` and the caller captures it with `$(func)`.",
+      "try_yourself": "Run `f() { echo data; echo debug >&2; }; X=$(f); echo \"X=[$X]\"`. Where does `debug` go?",
+      "table": {
+        "head": [
+          "",
+          "return",
+          "echo"
+        ],
+        "rows": [
+          [
+            "Gives",
+            "exit code 0-255",
+            "any text or number"
+          ],
+          [
+            "Read with",
+            "`$?` or `if func`",
+            "`VAR=$(func)`"
+          ],
+          [
+            "Use for",
+            "yes / no, success / failure",
+            "data: ports, names, lists"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d09p02",
+      "title": "Predict: local vs global variables",
+      "type": "predict",
+      "topic": "Scripting",
+      "minutes": 11,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A deploy script loops over servers with `i`, and calls a helper that also uses `i`. After the helper runs, the main loop is broken. Bash variables are global by default, even inside functions.",
+      "task": [
+        "Read the code in the solution box only after you predict: `count_to_2() { for i in 1 2; do :; done; }`.",
+        "Predict, then run: `i=10; count_to_2; echo \"i=$i\"`.",
+        "Predict, then run the same with `local i` inside the function.",
+        "Predict, then run: a function that sets `RESULT=done` (no local). Is `RESULT` visible after the call?"
+      ],
+      "hints": [
+        "Without `local`, the function changes the global `i`.",
+        "`local i` makes a new `i` that exists only while the function runs.",
+        "A global set inside a function stays after the call."
+      ],
+      "solution": [
+        "count_to_2() { for i in 1 2; do :; done; }",
+        "i=10; count_to_2; echo \"without local: i=$i\"",
+        "count_to_2() { local i; for i in 1 2; do :; done; }",
+        "i=10; count_to_2; echo \"with local:    i=$i\"",
+        "set_result() { RESULT=done; }",
+        "set_result; echo \"RESULT=$RESULT\""
+      ],
+      "explanation": [
+        {
+          "part": "no local",
+          "meaning": "The function uses the same global `i`. After the loop, `i` is 2."
+        },
+        {
+          "part": "local i",
+          "meaning": "A separate `i` for the function only. The global `i` keeps 10."
+        },
+        {
+          "part": "RESULT=done",
+          "meaning": "Global again: visible after the call. Sometimes useful, often a surprise."
+        },
+        {
+          "part": ":",
+          "meaning": "A command that does nothing. Here it is the empty loop body."
+        }
+      ],
+      "expected_output": "without local: i=2\nwith local:    i=10\nRESULT=done",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `local` outside a function: `bash: local: can only be used in a function`.",
+        "`local x=$(cmd)` hides the exit code of `cmd` (`$?` is the exit code of `local`). Write `local x; x=$(cmd)` when the exit code matters."
+      ],
+      "checks": [
+        {
+          "run": "local x=1",
+          "expect": "local: can only be used in a function"
+        }
+      ],
+      "interview_say": "Variables in bash are global by default, also inside functions. I declare every function variable with `local` so helpers do not break the caller's variables.",
+      "try_yourself": "Run `f() { local x; x=$(false); echo $?; }; f` and `g() { local x=$(false); echo $?; }; g`. Why are the numbers different?"
+    },
+    {
+      "id": "d09p03",
+      "title": "getopts: a deploy script with options",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 15,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The team wants `deploy.sh -e staging -v 2.4.1 [-n]`: `-e` environment (required), `-v` version (default `latest`), `-n` dry run. Wrong input must show a usage message and exit 2. This is how real CLI tools behave.",
+      "task": [
+        "Write a `usage()` function that prints the usage to stderr and exits 2.",
+        "Parse options with `while getopts \"e:v:nh\" opt; do case $opt in ... esac; done`.",
+        "Set defaults: `VERSION=latest`, `DRY_RUN=false`. Check that `-e` was given and is `dev`, `staging` or `prod`.",
+        "Print `deploy VERSION to ENV (dry run: yes/no)`.",
+        "Test: `-e staging -v 2.4.1`, `-n -e prod`, no options, `-e test`, and `-x`. Print the exit code each time."
+      ],
+      "hints": [
+        "In `\"e:v:nh\"`, a colon after a letter means \"this option needs a value\". The value is in `$OPTARG`.",
+        "`\\?)` handles unknown options (getopts prints its own error first).",
+        "After the loop, check: `[ -n \"$ENV\" ] || usage` and `case $ENV in dev|staging|prod) ;; *) usage ;; esac`."
+      ],
+      "solution": [
+        "cat > deploy.sh <<'EOF'",
+        "#!/bin/bash",
+        "usage() {",
+        "  echo \"usage: deploy.sh -e <dev|staging|prod> [-v version] [-n]\" >&2",
+        "  exit 2",
+        "}",
+        "ENV=\"\"",
+        "VERSION=latest          # default value",
+        "DRY_RUN=false",
+        "while getopts \"e:v:nh\" opt; do",
+        "  case $opt in",
+        "    e) ENV=$OPTARG ;;",
+        "    v) VERSION=$OPTARG ;;",
+        "    n) DRY_RUN=true ;;",
+        "    h) usage ;;",
+        "    \\?) usage ;;        # unknown option",
+        "  esac",
+        "done",
+        "[ -n \"$ENV\" ] || usage",
+        "case $ENV in dev|staging|prod) ;; *) echo \"error: unknown environment '$ENV'\" >&2; usage ;; esac",
+        "echo \"deploy $VERSION to $ENV (dry run: $DRY_RUN)\"",
+        "EOF",
+        "bash deploy.sh -e staging -v 2.4.1; echo \"exit: $?\"",
+        "bash deploy.sh -n -e prod;          echo \"exit: $?\"",
+        "bash deploy.sh;                     echo \"exit: $?\"",
+        "bash deploy.sh -e test;             echo \"exit: $?\"",
+        "bash deploy.sh -x;                  echo \"exit: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "getopts \"e:v:nh\" opt",
+          "meaning": "Read one option per loop round into `opt`. `e:` and `v:` need a value; `n` and `h` do not."
+        },
+        {
+          "part": "$OPTARG",
+          "meaning": "The value of the current option, for example `staging`."
+        },
+        {
+          "part": "\\?)",
+          "meaning": "getopts sets `opt` to `?` for an unknown option or a missing value."
+        },
+        {
+          "part": "usage() ... exit 2",
+          "meaning": "One place for the help text. Exit 2 = wrong usage."
+        },
+        {
+          "part": "defaults before the loop",
+          "meaning": "Options only overwrite them when given."
+        },
+        {
+          "part": "validation after the loop",
+          "meaning": "Required options and allowed values are checked once, at the end."
+        }
+      ],
+      "expected_output": "deploy 2.4.1 to staging (dry run: false)\nexit: 0\ndeploy latest to prod (dry run: true)\nexit: 0\nusage: deploy.sh -e <dev|staging|prod> [-v version] [-n]\nexit: 2\nerror: unknown environment 'test'\nusage: deploy.sh -e <dev|staging|prod> [-v version] [-n]\nexit: 2\ndeploy.sh: illegal option -- x\nusage: deploy.sh -e <dev|staging|prod> [-v version] [-n]\nexit: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting the colon: `getopts \"ev:n\"` and `-e staging` sets nothing, and `staging` is left as a normal argument.",
+        "Using `$1`, `$2` by hand for options: it breaks when the user changes the order. getopts handles any order.",
+        "getopts only supports short options like `-e`. For `--env`, use a `while`/`case`/`shift` loop (see P4)."
+      ],
+      "interview_say": "For script options I use `getopts`, set defaults first, validate required values after the loop, and call a `usage` function that prints to stderr and exits with code 2.",
+      "try_yourself": "Add `-r replicas` with a default of 2, and reject values that are not numbers using `[[ $REPLICAS =~ ^[0-9]+$ ]]`."
+    },
+    {
+      "id": "d09p04",
+      "title": "\"$@\" vs \"$*\", and shift",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A wrapper script `kube.sh` passes all its arguments to another command. One argument contains a space (a label value). Only `\"$@\"` keeps every argument exactly. `shift` is used to take off the first word (a subcommand).",
+      "task": [
+        "Write `show_args() { for a in \"$@\"; do echo \"[$a]\"; done; }`.",
+        "Call a function with `\"$@\"`, with `\"$*\"`, and with `$@` (no quotes), passing: `get pods \"app=todo api\"`.",
+        "Use `shift` to read a subcommand: `cmd=$1; shift`, then print the subcommand and the rest.",
+        "Print `$#` before and after `shift`."
+      ],
+      "hints": [
+        "`\"$@\"` = each argument as a separate word, exactly as given.",
+        "`\"$*\"` = all arguments joined into ONE word. `$@` without quotes splits at spaces again.",
+        "`shift` removes `$1`; then `$2` becomes `$1`, and `$#` is one smaller."
+      ],
+      "solution": [
+        "show_args() { for a in \"$@\"; do echo \"  [$a]\"; done; }",
+        "wrapper() {",
+        "  echo \"with \\\"\\$@\\\":\"; show_args \"$@\"",
+        "  echo \"with \\\"\\$*\\\":\"; show_args \"$*\"",
+        "  echo \"with \\$@ (no quotes):\"; show_args $@",
+        "}",
+        "wrapper get pods \"app=todo api\"",
+        "subcommand() {",
+        "  echo \"args: $#\"",
+        "  local cmd=$1; shift",
+        "  echo \"subcommand: $cmd, rest: $#\"",
+        "  show_args \"$@\"",
+        "}",
+        "subcommand deploy staging \"v2 final\""
+      ],
+      "explanation": [
+        {
+          "part": "\"$@\"",
+          "meaning": "Each argument separate and unchanged. Use this to pass arguments on."
+        },
+        {
+          "part": "\"$*\"",
+          "meaning": "All arguments as one string (joined with spaces). Good for messages only."
+        },
+        {
+          "part": "$@ without quotes",
+          "meaning": "Split again at spaces: `app=todo api` becomes two words. A bug."
+        },
+        {
+          "part": "shift",
+          "meaning": "Drop the first argument. Common for `tool.sh <subcommand> <args...>`."
+        }
+      ],
+      "expected_output": "with \"$@\":\n  [get]\n  [pods]\n  [app=todo api]\nwith \"$*\":\n  [get pods app=todo api]\nwith $@ (no quotes):\n  [get]\n  [pods]\n  [app=todo]\n  [api]\nargs: 3\nsubcommand: deploy, rest: 2\n  [staging]\n  [v2 final]",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `exec kubectl $@` in a wrapper: arguments with spaces break. Always `\"$@\"`.",
+        "Calling `shift` when there are no arguments: nothing happens and the exit code is 1. Check `$#` first."
+      ],
+      "interview_say": "`\"$@\"` passes every argument exactly as given, so I use it in wrappers. `\"$*\"` joins them into one string. `shift` removes the first argument, which is handy for subcommands.",
+      "try_yourself": "Write a loop `while [ $# -gt 0 ]; do echo \"arg: $1\"; shift; done` inside a function and call it with 4 arguments."
+    },
+    {
+      "id": "d09p05",
+      "title": "Find the bug: the file size helper",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`sizes.sh` should print the size in KB of each file and the total. For `big.log` (300 KB) it says 44 KB, and `my notes.txt` gives an error. The function uses `return` for data.",
+      "task": [
+        "Run `bash sizes.sh big.log small.log \"my notes.txt\"`. Compare with `ls -l`.",
+        "Find 3 bugs: data returned with `return`, `$*` in the loop, and a variable that should be `local`.",
+        "Fix them and run again."
+      ],
+      "hints": [
+        "300 % 256 = 44. That is the `return` problem from P1.",
+        "`for f in $*` splits `my notes.txt` into two words. Use `\"$@\"`.",
+        "Inside the function: `local size`. Print the result with `echo`, catch it with `kb=$(to_kb \"$f\")`."
+      ],
+      "solution": [
+        "bash sizes.sh big.log small.log \"my notes.txt\"",
+        "echo \"--- fixed ---\"",
+        "cat > sizes.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Print the size in KB of each file given as an argument, then the total.",
+        "total=0",
+        "to_kb() {",
+        "  local size",
+        "  size=$(stat -c %s \"$1\") || return 1",
+        "  echo $(( size / 1024 ))",
+        "}",
+        "for f in \"$@\"; do",
+        "  kb=$(to_kb \"$f\") || { echo \"skip $f\" >&2; continue; }",
+        "  echo \"$f: $kb KB\"",
+        "  total=$((total + kb))",
+        "done",
+        "echo \"total: $total KB\"",
+        "EOF",
+        "bash sizes.sh big.log small.log \"my notes.txt\""
+      ],
+      "explanation": [
+        {
+          "part": "echo $(( size / 1024 ))",
+          "meaning": "Bug 1: print the number. `return 300` became 44."
+        },
+        {
+          "part": "kb=$(to_kb \"$f\")",
+          "meaning": "Catch the printed number. `|| { ...; continue; }` skips files that fail."
+        },
+        {
+          "part": "for f in \"$@\"",
+          "meaning": "Bug 2: `$*` split `my notes.txt` into `my` and `notes.txt`."
+        },
+        {
+          "part": "local size",
+          "meaning": "Bug 3: `size` was global and could clash with the caller."
+        }
+      ],
+      "expected_output": "big.log: 44 KB\nsmall.log: 5 KB\nstat: cannot statx 'my': No such file or directory\nmy: 0 KB\nstat: cannot statx 'notes.txt': No such file or directory\nnotes.txt: 0 KB\ntotal: 49 KB\n--- fixed ---\nbig.log: 300 KB\nsmall.log: 5 KB\nmy notes.txt: 2 KB\ntotal: 307 KB",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "On Ubuntu 22.04 the error says `cannot stat` instead of `cannot statx` (older coreutils). The rest is the same.",
+      "verified": true,
+      "mistakes": [
+        "Seeing `stat: cannot statx 'my': No such file or directory` and renaming the file. The script must handle spaces.",
+        "Keeping `return` and adding `* 256`. Exit codes are never for data."
+      ],
+      "checks": [
+        {
+          "run": "bash sizes.sh \"my notes.txt\"",
+          "expect": "stat: cannot statx 'my': No such file or directory"
+        }
+      ],
+      "interview_say": "I return data with `echo` and capture it with `$( )`, loop over `\"$@\"` so file names with spaces work, and declare function variables `local`.",
+      "try_yourself": "Add a check at the top: if no files are given, print `usage: sizes.sh FILE...` to stderr and exit 2."
+    },
+    {
+      "id": "d09p06",
+      "title": "Input validation: required, defaults, numbers",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A scale script takes `scale.sh <service> [replicas]`. The service is required. Replicas default to 2, must be a whole number, and must be between 1 and 10, or the cluster could be overloaded.",
+      "task": [
+        "Use `${1:?message}` to stop when the service is missing.",
+        "Use `${2:-2}` for the default number of replicas.",
+        "Reject non-numbers with `[[ $R =~ ^[0-9]+$ ]]` and values outside 1-10.",
+        "Test with: no args, `todo-api`, `todo-api 5`, `todo-api five`, `todo-api 50`."
+      ],
+      "hints": [
+        "`${1:?service name is required}` prints the message and exits the script (code 1) when `$1` is empty.",
+        "Use `(( R >= 1 && R <= 10 ))` for the range check.",
+        "Send errors to `>&2` and use `exit 2` for bad input."
+      ],
+      "solution": [
+        "cat > scale.sh <<'EOF'",
+        "#!/bin/bash",
+        "SERVICE=${1:?service name is required}",
+        "R=${2:-2}",
+        "[[ $R =~ ^[0-9]+$ ]] || { echo \"error: replicas must be a number, got '$R'\" >&2; exit 2; }",
+        "(( R >= 1 && R <= 10 )) || { echo \"error: replicas must be 1-10, got $R\" >&2; exit 2; }",
+        "echo \"kubectl scale deployment/$SERVICE --replicas=$R\"",
+        "EOF",
+        "for args in \"\" \"todo-api\" \"todo-api 5\" \"todo-api five\" \"todo-api 50\"; do",
+        "  bash scale.sh $args; echo \"exit: $?\"",
+        "done"
+      ],
+      "explanation": [
+        {
+          "part": "${1:?msg}",
+          "meaning": "If `$1` is empty or missing: print `msg` to stderr and exit."
+        },
+        {
+          "part": "${2:-2}",
+          "meaning": "Default value 2 when the second argument is missing."
+        },
+        {
+          "part": "=~ ^[0-9]+$",
+          "meaning": "Only digits, at least one."
+        },
+        {
+          "part": "(( R >= 1 && R <= 10 ))",
+          "meaning": "Range check with normal math operators."
+        }
+      ],
+      "expected_output": "scale.sh: line 2: 1: service name is required\nexit: 1\nkubectl scale deployment/todo-api --replicas=2\nexit: 0\nkubectl scale deployment/todo-api --replicas=5\nexit: 0\nerror: replicas must be a number, got 'five'\nexit: 2\nerror: replicas must be 1-10, got 50\nexit: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Checking the range before the number check: `(( five >= 1 ))` treats `five` as an empty variable (0) and gives a confusing result.",
+        "Forgetting that `${1:?}` exits the whole script, not only the function."
+      ],
+      "interview_say": "I validate input at the top of the script: required arguments with `${1:?msg}`, defaults with `${2:-value}`, and numbers with a regex and a range check, so bad input never reaches kubectl.",
+      "try_yourself": "Change the default to come from an environment variable: `R=${2:-${DEFAULT_REPLICAS:-2}}`. Test with `DEFAULT_REPLICAS=3 bash scale.sh todo-api`."
+    },
+    {
+      "id": "d09p07",
+      "title": "A shared function library with source",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Every team script has the same `log`, `warn` and `die` functions copied in. A better way: keep them in one file `helpers.sh` and load it with `source`. Then all scripts print messages in the same format.",
+      "task": [
+        "Read `helpers.sh`.",
+        "Write `job.sh` that does `source \"$(dirname \"$0\")/helpers.sh\"`, then calls `log`, `warn`, and `die` if a file is missing.",
+        "Run `bash job.sh` and print the exit code. Send stderr to `/dev/null` once to see the difference."
+      ],
+      "hints": [
+        "`$(dirname \"$0\")` is the folder of the script, so `source` works from any folder.",
+        "`warn` and `die` print to stderr; `die` also exits with code 1.",
+        "`[ -f config.yml ] || die \"config.yml not found\"`."
+      ],
+      "solution": [
+        "cat > job.sh <<'EOF'",
+        "#!/bin/bash",
+        "source \"$(dirname \"$0\")/helpers.sh\"",
+        "log \"backup job started\"",
+        "warn \"disk is 85% full\"",
+        "[ -f config.yml ] || die \"config.yml not found\"",
+        "log \"never printed\"",
+        "EOF",
+        "bash job.sh; echo \"exit: $?\"",
+        "echo \"--- stderr hidden ---\"",
+        "bash job.sh 2>/dev/null; echo \"exit: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "source helpers.sh",
+          "meaning": "Load the functions into the current script."
+        },
+        {
+          "part": "$(dirname \"$0\")",
+          "meaning": "The script's own folder, so the path works from anywhere."
+        },
+        {
+          "part": "die() { ...; exit 1; }",
+          "meaning": "Print an error and stop. Very common helper."
+        },
+        {
+          "part": "$*",
+          "meaning": "In a message function, `$*` joins all words into one line."
+        }
+      ],
+      "expected_output": "[15:59:16] INFO  backup job started\n[15:59:16] WARN  disk is 85% full\n[15:59:16] ERROR config.yml not found\nexit: 1\n--- stderr hidden ---\n[15:59:16] INFO  backup job started\nexit: 1",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The time in brackets is the current time, so it is different on every run.",
+      "verified": true,
+      "mistakes": [
+        "`source helpers.sh` with a relative path: it fails when the script is started from another folder (`helpers.sh: No such file or directory`).",
+        "Putting `exit` in a sourced library outside a function: it ends the script that sources it."
+      ],
+      "checks": [
+        {
+          "run": "mkdir -p other && cd other && printf 'source helpers.sh\\n' > j.sh && bash j.sh",
+          "expect": "helpers.sh: No such file or directory"
+        }
+      ],
+      "interview_say": "I keep shared functions like `log` and `die` in one file and load it with `source`. Errors go to stderr, so tools that read stdout get clean data.",
+      "try_yourself": "Add a `debug()` function that only prints when `DEBUG=1` is set. Test with `DEBUG=1 bash job.sh`."
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you return a string from a bash function?",
+      "a": "Print it with `echo` and capture it with `VAR=$(func)`. `return` only sets an exit code from 0 to 255.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What does `local` do?",
+      "a": "It makes a variable that exists only inside the function, so it does not change a global variable with the same name.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What is the difference between `\"$@\"` and `\"$*\"`?",
+      "a": "`\"$@\"` keeps each argument separate and unchanged. `\"$*\"` joins all arguments into one string.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you parse options like `-e staging -v 2.4` in bash?",
+      "a": "With `while getopts \"e:v:\" opt; do case $opt in e) ENV=$OPTARG;; ... esac; done`. A colon means the option needs a value.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "What should a script do when it gets wrong input?",
+      "a": "Print a short usage message to stderr and exit with a non-zero code, usually 2.",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "name() { ...; }",
+      "meaning": "Define a function",
+      "example": "log() { echo \"[INFO] $*\"; }",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "local",
+      "meaning": "Variable only inside the function",
+      "example": "local port=$1",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "return 0/1",
+      "meaning": "Function exit code (yes/no only)",
+      "example": "is_up() { curl -sf \"$1\" >/dev/null; }",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "VAR=$(func)",
+      "meaning": "Get data from a function (it echoes)",
+      "example": "PORT=$(get_port)",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "\"$@\"",
+      "meaning": "Pass all arguments unchanged",
+      "example": "kubectl \"$@\"",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "\"$*\"",
+      "meaning": "All arguments as one string",
+      "example": "echo \"args: $*\"",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "shift",
+      "meaning": "Drop the first argument",
+      "example": "cmd=$1; shift",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "getopts",
+      "meaning": "Parse short options",
+      "example": "while getopts \"e:v:n\" opt; do ...",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "$OPTARG",
+      "meaning": "Value of the current option",
+      "example": "e) ENV=$OPTARG ;;",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "${1:?msg}",
+      "meaning": "Required argument, else exit with msg",
+      "example": "SERVICE=${1:?service required}",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "usage() { ...; exit 2; }",
+      "meaning": "Usage message to stderr",
+      "example": "[ $# -ge 1 ] || usage",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "source file",
+      "meaning": "Load shared functions",
+      "example": "source \"$(dirname \"$0\")/helpers.sh\"",
+      "topic": "Scripting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Functions",
+      "problems": [
+        "d09p01",
+        "d09p05",
+        "d09p07"
+      ]
+    },
+    {
+      "item": "local",
+      "problems": [
+        "d09p02",
+        "d09p05"
+      ]
+    },
+    {
+      "item": "return vs echo",
+      "problems": [
+        "d09p01",
+        "d09p05"
+      ]
+    },
+    {
+      "item": "Positional parameters",
+      "problems": [
+        "d09p04",
+        "d09p06"
+      ]
+    },
+    {
+      "item": "shift",
+      "problems": [
+        "d09p04"
+      ]
+    },
+    {
+      "item": "\"$@\" vs \"$*\"",
+      "problems": [
+        "d09p04",
+        "d09p05"
+      ]
+    },
+    {
+      "item": "getopts",
+      "problems": [
+        "d09p03"
+      ]
+    },
+    {
+      "item": "Usage messages",
+      "problems": [
+        "d09p03",
+        "d09p06"
+      ]
+    },
+    {
+      "item": "Default values",
+      "problems": [
+        "d09p03",
+        "d09p06"
+      ]
+    },
+    {
+      "item": "Input validation",
+      "problems": [
+        "d09p03",
+        "d09p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day09"
+}

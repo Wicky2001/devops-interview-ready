@@ -1,0 +1,585 @@
+{
+  "day": 21,
+  "week": 3,
+  "review_day": true,
+  "title": "Week 3 review: server troubleshooting",
+  "goal": "Investigate six classic incidents step by step with real commands: disk full, high CPU, port in use, service will not start, cannot SSH, DNS not resolving.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day21 && cd ~/bash-practice/day21",
+    "# S1: a Jenkins home with old workspaces (about 24 MB of real data)",
+    "for ws in todo-frontend todo-backend parts-service old-job-2024 experiment-ml; do mkdir -p \"jenkins-home/workspace/$ws\"; done",
+    "head -c 2097152 /dev/zero > jenkins-home/workspace/todo-frontend/dist.tgz",
+    "head -c 3145728 /dev/zero > jenkins-home/workspace/todo-backend/app.jar",
+    "head -c 1048576 /dev/zero > jenkins-home/workspace/parts-service/app.jar",
+    "head -c 8388608 /dev/zero > jenkins-home/workspace/old-job-2024/build.tar",
+    "head -c 10485760 /dev/zero > jenkins-home/workspace/experiment-ml/model.pt",
+    "touch -d '120 days ago' jenkins-home/workspace/old-job-2024 jenkins-home/workspace/old-job-2024/build.tar",
+    "touch -d '45 days ago' jenkins-home/workspace/experiment-ml jenkins-home/workspace/experiment-ml/model.pt",
+    "# S2: a report job that got stuck in a busy loop",
+    "printf '%s\\n' '#!/bin/bash' '# nightly report (stuck in a loop by mistake)' 'while :; do :; done' > report-generator.sh",
+    "# S4: a service that checks its config before it starts",
+    "mkdir -p svc/www svc/logs",
+    "echo '{\"status\":\"UP\"}' > svc/www/health.json",
+    "printf '%s\\n' 'PORT=8097' 'DB_URL=postgres://db.todo.local:5432/todo' 'LOG_LEVEL=info' > svc/todo.conf.example",
+    "printf '%s\\n' 'PORT=eighty' 'LOG_LEVEL=info' > svc/todo.conf",
+    "printf '%s\\n' '#!/bin/bash' '# todo-svc: read todo.conf, check it, then serve www/ on PORT' 'cd \"$(dirname \"$0\")\"' 'source ./todo.conf' 'log() { echo \"$(date +%F) $*\" >> logs/todo-svc.log; }' 'if ! [[ $PORT =~ ^[0-9]+$ ]]; then log \"FATAL invalid PORT value: $PORT\"; exit 3; fi' 'if [ -z \"$DB_URL\" ]; then log \"FATAL DB_URL is not set\"; exit 3; fi' 'log \"INFO starting on port $PORT\"' 'exec python3 -m http.server \"$PORT\" --bind 127.0.0.1 --directory www' > svc/todo-svc.sh",
+    "# S5: a key copied from Windows with loose permissions",
+    "mkdir -p keys",
+    "ssh-keygen -q -t ed25519 -N '' -C 'wicky@laptop' -f keys/prod_key",
+    "chmod 644 keys/prod_key",
+    "cd ~/bash-practice/day21"
+  ],
+  "warmup": [
+    {
+      "q": "How do you list the contents of `app.tar.gz` without extracting?",
+      "a": "`tar -tzf app.tar.gz`",
+      "from_day": 20
+    },
+    {
+      "q": "`df` shows a full disk, `du` shows little. What do you check?",
+      "a": "Deleted files that a process still holds open: `sudo lsof +L1`.",
+      "from_day": 17
+    },
+    {
+      "q": "How do you find the process that listens on port 8080?",
+      "a": "`sudo ss -ltnp | grep :8080` or `sudo lsof -i :8080`.",
+      "from_day": 18
+    },
+    {
+      "q": "What does `Permission denied (publickey)` usually mean?",
+      "a": "Wrong key, wrong user, or bad permissions on `~/.ssh` / the key / `authorized_keys`.",
+      "from_day": 19
+    }
+  ],
+  "problems": [
+    {
+      "id": "d21p01",
+      "title": "Scenario 1: disk full on the Jenkins server",
+      "type": "incident",
+      "topic": "Troubleshooting",
+      "minutes": 11,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "Jenkins builds fail with `No space left on device`. The `workspace` folder under `jenkins-home` is the usual suspect. Find what is big and old, and clean it safely with a dry run first.",
+      "task": [
+        "Show the total size of `jenkins-home/workspace` and each workspace, biggest last.",
+        "List workspaces not changed for more than 30 days.",
+        "Dry run: print the old workspaces that would be deleted.",
+        "Delete them, and show the new total."
+      ],
+      "hints": [
+        "`du -sh jenkins-home/workspace/* | sort -h`",
+        "`find jenkins-home/workspace -mindepth 1 -maxdepth 1 -type d -mtime +30`",
+        "Same find with `-print` first, then `-exec rm -rf {} +`."
+      ],
+      "solution": [
+        "du -sh jenkins-home/workspace",
+        "du -sh jenkins-home/workspace/* | sort -h",
+        "echo \"=== not changed for 30+ days (dry run) ===\"",
+        "find jenkins-home/workspace -mindepth 1 -maxdepth 1 -type d -mtime +30 -print | sort",
+        "find jenkins-home/workspace -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +",
+        "echo \"=== after cleanup ===\"",
+        "du -sh jenkins-home/workspace"
+      ],
+      "explanation": [
+        {
+          "part": "Step 1: df -h",
+          "meaning": "On a real server, first find the full filesystem (`df -h`, `df -i`)."
+        },
+        {
+          "part": "Step 2: du -sh ... | sort -h",
+          "meaning": "Walk down to the biggest folders (Day 17)."
+        },
+        {
+          "part": "-mindepth 1 -maxdepth 1 -type d",
+          "meaning": "Only the workspace folders themselves, not files inside them."
+        },
+        {
+          "part": "-mtime +30",
+          "meaning": "Not changed for more than 30 days (Day 12)."
+        },
+        {
+          "part": "-print, then -exec rm -rf {} +",
+          "meaning": "Dry run, then the same test with the action."
+        },
+        {
+          "part": "long-term fix",
+          "meaning": "Jenkins \"Discard old builds\" and workspace cleanup in the pipeline, plus a disk alert (Day 17 P5)."
+        }
+      ],
+      "expected_output": "25M\tjenkins-home/workspace\n1.1M\tjenkins-home/workspace/parts-service\n2.1M\tjenkins-home/workspace/todo-frontend\n3.1M\tjenkins-home/workspace/todo-backend\n8.1M\tjenkins-home/workspace/old-job-2024\n11M\tjenkins-home/workspace/experiment-ml\n=== not changed for 30+ days (dry run) ===\njenkins-home/workspace/experiment-ml\njenkins-home/workspace/old-job-2024\n=== after cleanup ===\n6.1M\tjenkins-home/workspace",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`rm -rf jenkins-home/workspace/*` deletes the workspaces of running builds too.",
+        "Cleaning without finding the cause: the disk fills again tomorrow. Add build retention and monitoring."
+      ],
+      "interview_say": "I find the full filesystem with `df -h`, walk down with `du -sh | sort -h`, list old data with `find -mtime`, dry-run, then delete. Then I fix the cause: retention settings and a disk alert.",
+      "try_yourself": "Compress instead of delete: `tar -czf old-job.tgz -C jenkins-home/workspace old-job-2024` (run Reset and setup again first)."
+    },
+    {
+      "id": "d21p02",
+      "title": "Scenario 2: high CPU on the training server",
+      "type": "incident",
+      "topic": "Troubleshooting",
+      "minutes": 11,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The model training server is slow and the fans are loud. Find which process uses the CPU, check what it is, try a lower priority, and stop it if it is a mistake.",
+      "task": [
+        "Start the problem: `bash report-generator.sh &` (it is a stuck loop).",
+        "Check the load and CPU count (`uptime`, `nproc`).",
+        "Show the top CPU processes with `ps -eo pid,pcpu,args --sort=-pcpu | head`.",
+        "Check what the top process is (`/proc/PID/cmdline`, `ps -o lstart=`). Lower its priority with `renice`.",
+        "It is a stuck job: stop it with SIGTERM and check it is gone."
+      ],
+      "hints": [
+        "In `top`, press `P` to sort by CPU.",
+        "`renice -n 19 -p PID` = lowest priority (allowed for the user's own processes).",
+        "`kill PID`, then `kill -0 PID` to check."
+      ],
+      "solution": [
+        "bash report-generator.sh &",
+        "JOB=$!",
+        "sleep 2",
+        "echo \"load: $(cut -d' ' -f1-3 /proc/loadavg), CPUs: $(nproc)\"",
+        "ps -eo pid,pcpu,args --sort=-pcpu | head -n 2",
+        "TOP=$(ps -eo pid=,pcpu= --sort=-pcpu | head -n 1 | awk '{print $1}')",
+        "echo \"top process: $(tr '\\0' ' ' < /proc/$TOP/cmdline)\"",
+        "renice -n 19 -p \"$TOP\" > /dev/null && echo \"niceness now: $(ps -o ni= -p \"$TOP\")\"",
+        "kill \"$TOP\"",
+        "sleep 0.5",
+        "kill -0 \"$TOP\" 2>/dev/null || echo \"stuck job stopped\""
+      ],
+      "explanation": [
+        {
+          "part": "uptime / nproc",
+          "meaning": "Load compared with CPU count: is the machine really overloaded? (Day 17)"
+        },
+        {
+          "part": "ps --sort=-pcpu",
+          "meaning": "Biggest CPU users first (Day 15)."
+        },
+        {
+          "part": "/proc/PID/cmdline",
+          "meaning": "Exactly what was started (Day 15)."
+        },
+        {
+          "part": "renice -n 19",
+          "meaning": "If the job is needed but not urgent, make it nice instead of killing it."
+        },
+        {
+          "part": "kill (SIGTERM)",
+          "meaning": "If it is a mistake, stop it cleanly; `kill -9` only if needed."
+        },
+        {
+          "part": "other causes",
+          "meaning": "High `wa` in `vmstat` = waiting for disk; high `si/so` = swapping (memory). Then CPU is not the real problem."
+        }
+      ],
+      "expected_output": "load: 0.14 0.07 0.01, CPUs: 4\n  PID %CPU COMMAND\n29093 99.0 bash report-generator.sh\ntop process: bash report-generator.sh\nniceness now:  19\nstuck job stopped",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "PIDs, load and %CPU values are different on every run.",
+      "verified": true,
+      "mistakes": [
+        "Killing the top CPU process without checking what it is. It can be the database doing important work.",
+        "Looking only at CPU. A slow server can also be swapping or waiting for disk: check `free -m` and `vmstat 1 5` too."
+      ],
+      "interview_say": "For high CPU I check load against `nproc`, find the process with `top` or `ps --sort=-pcpu`, find out what it is, then renice, fix or stop it. I also check memory and I/O wait, because they can look like a CPU problem.",
+      "try_yourself": "Run `top -b -n 1 | head -n 15` while the loop runs (start it again). Find the line for `bash`."
+    },
+    {
+      "id": "d21p03",
+      "title": "Scenario 3: port in use after a failed pipeline",
+      "type": "incident",
+      "topic": "Troubleshooting",
+      "minutes": 11,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "On the CI machine, the integration test starts the app on port 8095 and fails with `Address already in use`. The last pipeline crashed and left its test server running. Find it with `ss`, confirm it, stop it, and rerun.",
+      "task": [
+        "Simulate the leftover: start a test server on 8095 in the background.",
+        "Start the \"new\" one on 8095 and save its error in `start.log`. Show the last line.",
+        "Find the owner with `ss -ltnp 'sport = :8095'`. Print only the program name and check the full command with `ps`.",
+        "Stop it with `fuser -k -TERM 8095/tcp`, start the new server, and test it with curl."
+      ],
+      "hints": [
+        "`ss -p` shows `users:((\"python3\",pid=1234,fd=3))`.",
+        "`grep -o 'pid=[0-9]*'` and `cut -d= -f2` get the PID from that text.",
+        "`fuser -k -TERM 8095/tcp` sends SIGTERM to every process using that port."
+      ],
+      "solution": [
+        "python3 -m http.server 8095 --bind 127.0.0.1 > /dev/null 2>&1 &    # leftover from the crashed pipeline",
+        "sleep 1",
+        "python3 -m http.server 8095 --bind 127.0.0.1 > start.log 2>&1",
+        "tail -n 1 start.log",
+        "INFO=$(ss -ltnp 'sport = :8095' | tail -n 1)",
+        "echo \"program: $(grep -o '\"[^\"]*\"' <<< \"$INFO\" | tr -d '\"')\"",
+        "PID=$(grep -o 'pid=[0-9]*' <<< \"$INFO\" | cut -d= -f2)",
+        "echo \"command: $(ps -o args= -p \"$PID\")\"",
+        "fuser -k -TERM 8095/tcp > /dev/null 2>&1",
+        "sleep 0.5",
+        "python3 -m http.server 8095 --bind 127.0.0.1 > /dev/null 2>&1 &",
+        "sleep 1",
+        "curl -s -o /dev/null -w 'new test server: %{http_code}\\n' http://127.0.0.1:8095/",
+        "kill $!"
+      ],
+      "explanation": [
+        {
+          "part": "Step 1: read the error",
+          "meaning": "`Address already in use` names the problem exactly."
+        },
+        {
+          "part": "Step 2: ss -ltnp",
+          "meaning": "Find the listener and its PID (Day 18). Use sudo for other users' processes."
+        },
+        {
+          "part": "Step 3: ps -o args=",
+          "meaning": "Confirm it is really the old test server, not a real service."
+        },
+        {
+          "part": "Step 4: fuser -k -TERM",
+          "meaning": "Send SIGTERM to the port owner. Another tool for the same job as `lsof -t` + `kill`."
+        },
+        {
+          "part": "long-term fix",
+          "meaning": "Pipelines should stop test servers in a `post { always { ... } }` block or with `trap` (Day 22), or use random free ports."
+        }
+      ],
+      "expected_output": "OSError: [Errno 98] Address already in use\nprogram: python3\ncommand: python3 -m http.server 8095 --bind 127.0.0.1\nnew test server: 200",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`fuser -k 8095/tcp` without `-TERM` sends SIGKILL by default.",
+        "Using a fixed port for tests on a shared CI agent: two pipelines at the same time will clash."
+      ],
+      "interview_say": "I read the error, find the listener with `ss -ltnp`, confirm the process with `ps`, stop it cleanly, and then fix the pipeline so it always cleans up its test servers.",
+      "try_yourself": "Find a free port with Python: `python3 -c 'import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1])'`."
+    },
+    {
+      "id": "d21p04",
+      "title": "Scenario 4: the service will not start (find the config bugs)",
+      "type": "fix-bug",
+      "topic": "Troubleshooting",
+      "minutes": 11,
+      "optional": false,
+      "core": false,
+      "workdir": "svc",
+      "situation": "After a config change, `todo-svc` exits right after start. With systemd the user would run `systemctl status` and `journalctl -u`. Here the service writes its own log. Read the exit code and the log, compare the config with the example, fix it, and start again.",
+      "task": [
+        "Start it: `bash todo-svc.sh`. Print the exit code.",
+        "Read the last line of `logs/todo-svc.log`.",
+        "Compare `todo.conf` with `todo.conf.example` using `diff`.",
+        "Fix the config (`sed -i` for PORT, add the missing DB_URL). Start the service in the background and test `/health.json`."
+      ],
+      "hints": [
+        "The exit code (3) and the FATAL line say exactly what is wrong.",
+        "`sed -i 's/^PORT=.*/PORT=8097/' todo.conf`",
+        "`grep '^DB_URL=' todo.conf.example >> todo.conf`"
+      ],
+      "solution": [
+        "bash todo-svc.sh; echo \"exit code: $?\"",
+        "tail -n 1 logs/todo-svc.log | cut -d' ' -f2-",
+        "diff todo.conf todo.conf.example",
+        "sed -i 's/^PORT=.*/PORT=8097/' todo.conf           # fix 1",
+        "bash todo-svc.sh; echo \"exit code: $?\"             # it fails again: a second problem",
+        "tail -n 1 logs/todo-svc.log | cut -d' ' -f2-",
+        "grep '^DB_URL=' todo.conf.example >> todo.conf     # fix 2",
+        "bash todo-svc.sh > /dev/null 2>&1 &                # now it starts and keeps running",
+        "sleep 1",
+        "curl -s http://127.0.0.1:8097/health.json",
+        "tail -n 1 logs/todo-svc.log | cut -d' ' -f2-",
+        "kill $!"
+      ],
+      "explanation": [
+        {
+          "part": "exit code 3",
+          "meaning": "The service reports that it failed on purpose (config check)."
+        },
+        {
+          "part": "tail logs ... | cut -d' ' -f2-",
+          "meaning": "Last log line without the date column. With systemd: `journalctl -u todo-svc -n 20`."
+        },
+        {
+          "part": "diff conf example",
+          "meaning": "Compare with a known good config to see wrong and missing lines (Day 2)."
+        },
+        {
+          "part": "sed -i / >>",
+          "meaning": "Fix the value, append the missing line (Day 11, Day 4)."
+        },
+        {
+          "part": "systemd version of this",
+          "meaning": "`systemctl status todo-svc` → `journalctl -u todo-svc -n 50` → fix → `systemctl restart todo-svc`."
+        }
+      ],
+      "expected_output": "exit code: 3\nFATAL invalid PORT value: eighty\n1c1,2\n< PORT=eighty\n---\n> PORT=8097\n> DB_URL=postgres://db.todo.local:5432/todo\nexit code: 3\nFATAL DB_URL is not set\n{\"status\":\"UP\"}\nINFO starting on port 8097",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Restarting the service again and again without reading the log. The log says why.",
+        "Fixing only the first error. Run again after each fix: here a second problem (DB_URL) appears after PORT is fixed."
+      ],
+      "interview_say": "When a service does not start, I check `systemctl status` and `journalctl -u name` for the real error, compare the config with a known good one, fix one thing at a time, and restart.",
+      "try_yourself": "Add `TIMEOUT=abc` to the config and a check for it in `todo-svc.sh` (number only). Test it."
+    },
+    {
+      "id": "d21p05",
+      "title": "Scenario 5: cannot SSH to the server",
+      "type": "incident",
+      "topic": "Troubleshooting",
+      "minutes": 11,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate says \"SSH to prod does not work\". Instead of guessing, the user writes a small check script that tests, in order: the name, the port, and the key file permissions. Here it runs against a local port where no SSH server listens.",
+      "task": [
+        "Write `ssh-check.sh HOST PORT KEY` with three checks: name resolves (`getent hosts`), port open (`nc -z -w 2`), key is 600 (`stat -c %a`).",
+        "Print OK or a clear FAIL message for each check, with a hint.",
+        "Run it for `localhost 2222 keys/prod_key`.",
+        "Fix the key permission and run it again. What is left?"
+      ],
+      "hints": [
+        "`getent hosts \"$HOST\" > /dev/null`",
+        "`nc -z -w 2 \"$HOST\" \"$PORT\"` exits 0 when the port is open.",
+        "`[ \"$(stat -c %a \"$KEY\")\" = 600 ]`"
+      ],
+      "solution": [
+        "cat > ssh-check.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: ssh-check.sh HOST PORT KEY",
+        "HOST=${1:?host}; PORT=${2:-22}; KEY=${3:?key file}",
+        "if getent hosts \"$HOST\" > /dev/null; then echo \"OK   name $HOST resolves\"",
+        "else echo \"FAIL name $HOST does not resolve -> check DNS, /etc/hosts, typo\"; fi",
+        "if nc -z -w 2 \"$HOST\" \"$PORT\" 2>/dev/null; then echo \"OK   port $PORT is open\"",
+        "else echo \"FAIL port $PORT is closed or filtered -> sshd running? security group? right port?\"; fi",
+        "PERM=$(stat -c %a \"$KEY\")",
+        "if [ \"$PERM\" = 600 ] || [ \"$PERM\" = 400 ]; then echo \"OK   key $KEY has permission $PERM\"",
+        "else echo \"FAIL key $KEY has permission $PERM -> chmod 600 $KEY\"; fi",
+        "EOF",
+        "bash ssh-check.sh localhost 2222 keys/prod_key",
+        "chmod 600 keys/prod_key",
+        "echo \"--- after chmod ---\"",
+        "bash ssh-check.sh localhost 2222 keys/prod_key"
+      ],
+      "explanation": [
+        {
+          "part": "order of checks",
+          "meaning": "Name → network/port → authentication. Each layer needs the one before it."
+        },
+        {
+          "part": "getent hosts",
+          "meaning": "Name resolution (Day 18)."
+        },
+        {
+          "part": "nc -z -w 2",
+          "meaning": "TCP port test with a 2 second timeout. Refused = nothing listens; timeout = firewall."
+        },
+        {
+          "part": "stat -c %a key",
+          "meaning": "Key permissions (Day 19): SSH ignores keys that others can read."
+        },
+        {
+          "part": "still FAIL on the port",
+          "meaning": "Here no sshd runs on 2222. On a real server: `systemctl status ssh`, `ss -ltn | grep :22`, the security group, or the cloud console."
+        },
+        {
+          "part": "next step",
+          "meaning": "If all three are OK and it still fails: `ssh -v` and the server log (`journalctl -u ssh`, `/var/log/auth.log`)."
+        }
+      ],
+      "expected_output": "OK   name localhost resolves\nFAIL port 2222 is closed or filtered -> sshd running? security group? right port?\nFAIL key keys/prod_key has permission 644 -> chmod 600 keys/prod_key\n--- after chmod ---\nOK   name localhost resolves\nFAIL port 2222 is closed or filtered -> sshd running? security group? right port?\nOK   key keys/prod_key has permission 600",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Jumping to `ssh -vvv` first. Simple checks (name, port, key) find most problems faster.",
+        "Opening port 22 to `0.0.0.0/0` in the security group to \"fix\" it. Allow only the team's IP addresses, or use a bastion or SSM."
+      ],
+      "interview_say": "For SSH problems I check in layers: does the name resolve, is port 22 reachable, then the key, user and permissions. After that, `ssh -v` and the server's auth log show the exact reason.",
+      "try_yourself": "Add a fourth check: the user name, using `ssh -G \"$HOST\" | awk '/^user /{print $2}'`."
+    },
+    {
+      "id": "d21p06",
+      "title": "Scenario 6: DNS not resolving — is it DNS or the app?",
+      "type": "incident",
+      "topic": "Troubleshooting",
+      "minutes": 11,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The frontend cannot reach `http://todo.internal:8096`. The app team says \"our app is up\". The user proves where the problem is: first the name, then the app itself, by pointing the name at the right IP for one curl request only (no system change).",
+      "task": [
+        "Start the \"app\" on 127.0.0.1:8096 (a test server).",
+        "Try `curl` with the name. Print the exit code.",
+        "Check the name with `getent hosts todo.internal`.",
+        "Test the app with the name, but give curl the IP yourself: `curl --resolve todo.internal:8096:127.0.0.1 ...`.",
+        "Write down the conclusion and the real fix."
+      ],
+      "hints": [
+        "curl exit code 6 = could not resolve host.",
+        "`--resolve HOST:PORT:IP` makes curl use that IP for that name and port. Nothing on the system changes.",
+        "If it works with `--resolve`, the app is fine and DNS (or /etc/hosts) is the problem."
+      ],
+      "solution": [
+        "python3 -m http.server 8096 --bind 127.0.0.1 --directory svc/www > /dev/null 2>&1 &",
+        "SRV=$!",
+        "sleep 1",
+        "curl -s --max-time 5 http://todo.internal:8096/health.json; echo \"curl by name: exit code $?\"",
+        "getent hosts todo.internal || echo \"getent: no answer for todo.internal (exit code $?)\"",
+        "curl -s --resolve todo.internal:8096:127.0.0.1 http://todo.internal:8096/health.json",
+        "echo \"conclusion: the app answers; the name does not resolve -> fix DNS\"",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "exit code 6",
+          "meaning": "curl could not resolve the host name: no IP, so no connection was even tried."
+        },
+        {
+          "part": "getent hosts",
+          "meaning": "Same resolver as programs: hosts file + DNS (Day 18)."
+        },
+        {
+          "part": "--resolve name:port:ip",
+          "meaning": "Bypass DNS for one request. Proves the app works."
+        },
+        {
+          "part": "real fixes",
+          "meaning": "Create or fix the DNS record (for example in Route 53 or CoreDNS), check the `search` domain in `/etc/resolv.conf`, or in Kubernetes use the service name `todo-backend.default.svc.cluster.local`."
+        },
+        {
+          "part": "dig (with internet)",
+          "meaning": "`dig todo.internal` and `dig @10.0.0.2 todo.internal` show what each DNS server answers."
+        }
+      ],
+      "expected_output": "curl by name: exit code 6\ngetent: no answer for todo.internal (exit code 2)\n{\"status\":\"UP\"}\nconclusion: the app answers; the name does not resolve -> fix DNS",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Adding the name to `/etc/hosts` on every server as the \"fix\". It hides the DNS problem and breaks when the IP changes.",
+        "Testing with `ping`: if ICMP is blocked, DNS problems and network problems look the same."
+      ],
+      "interview_say": "To separate DNS from app problems, I check `getent hosts name` or `dig`, then call the app by IP or with `curl --resolve`. If the app answers by IP, I fix DNS, not the app.",
+      "try_yourself": "Run `curl -sv --resolve todo.internal:8096:127.0.0.1 http://todo.internal:8096/ 2>&1 | grep -i 'added\\|connected'` while the server runs."
+    }
+  ],
+  "interview": [
+    {
+      "q": "Scenario: \"The server is slow.\" What do you check first?",
+      "a": "`uptime` (load vs `nproc`), `top` (CPU and memory per process), `free -m` (available, swap), `vmstat 1 5` (wa = disk wait, si/so = swap), `df -h` (full disk), then the app logs.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario: \"No space left on device.\" What do you do?",
+      "a": "`df -h` and `df -i` to find the filesystem, `du -xh --max-depth=1 | sort -h` to find big folders, `lsof +L1` for deleted-open files, clean safely, then fix retention and add alerts.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario: \"The app does not start: port already in use.\"",
+      "a": "`ss -ltnp | grep :PORT` or `lsof -i :PORT` to find the process, check it with `ps`, stop it cleanly, start the app, and fix whatever left the old process running.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario: \"The service fails to start after a deploy.\"",
+      "a": "`systemctl status name`, `journalctl -u name -n 50`, check the config (compare with the last good one or `git diff`), `systemd-analyze verify` for unit changes, fix one thing, restart.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario: \"I cannot SSH to the server.\"",
+      "a": "Check the name (`getent hosts`), the port (`nc -zv host 22`; refused vs timeout), the security group, then the key, user and permissions, and `ssh -v`. On the server: `journalctl -u ssh` or `/var/log/auth.log`.",
+      "topic": "Troubleshooting"
+    },
+    {
+      "q": "Scenario: \"The app cannot reach api.internal.\"",
+      "a": "`getent hosts` / `dig` for DNS, then curl by IP or `curl --resolve` to test the app, `nc -zv` for the port. If only the name fails, fix DNS or the search domain.",
+      "topic": "Troubleshooting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "df -h; df -i; du -sh * | sort -h",
+      "meaning": "Disk full checklist",
+      "example": "sudo du -xh --max-depth=1 /var | sort -h",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "uptime; nproc; ps --sort=-pcpu",
+      "meaning": "High CPU checklist",
+      "example": "ps -eo pid,pcpu,args --sort=-pcpu | head",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "ss -ltnp 'sport = :P'; fuser -k -TERM P/tcp",
+      "meaning": "Port in use checklist",
+      "example": "sudo ss -ltnp | grep :8080",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "systemctl status; journalctl -u",
+      "meaning": "Service will not start checklist",
+      "example": "journalctl -u todo-api -n 50",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "getent hosts; nc -zv host 22; ssh -v",
+      "meaning": "Cannot SSH checklist",
+      "example": "nc -zv -w 3 10.0.1.10 22",
+      "topic": "Troubleshooting"
+    },
+    {
+      "cmd": "curl --resolve name:port:ip",
+      "meaning": "Test an app without DNS",
+      "example": "curl --resolve api.internal:443:10.0.1.5 https://api.internal/health",
+      "topic": "Troubleshooting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Disk full",
+      "problems": [
+        "d21p01"
+      ]
+    },
+    {
+      "item": "High CPU",
+      "problems": [
+        "d21p02"
+      ]
+    },
+    {
+      "item": "Port in use",
+      "problems": [
+        "d21p03"
+      ]
+    },
+    {
+      "item": "Service will not start",
+      "problems": [
+        "d21p04"
+      ]
+    },
+    {
+      "item": "Cannot SSH",
+      "problems": [
+        "d21p05"
+      ]
+    },
+    {
+      "item": "DNS not resolving",
+      "problems": [
+        "d21p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day21"
+}

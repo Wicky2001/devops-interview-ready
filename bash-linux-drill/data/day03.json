@@ -1,0 +1,810 @@
+{
+  "day": 3,
+  "week": 1,
+  "title": "Permissions, users, groups and sudo",
+  "goal": "Read and set file permissions with numbers and letters, and know who can do what: owner, group, others and root.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day03 && cd ~/bash-practice/day03",
+    "# P1: a deploy kit that came without permissions",
+    "mkdir -p kit",
+    "printf '#!/bin/bash\\necho \"deploying todo-api...\"\\n' > kit/deploy.sh",
+    "printf 'port: 8080\\n' > kit/app.yml",
+    "printf 'DB_PASSWORD=change-me\\n' > kit/.env",
+    "chmod 644 kit/deploy.sh kit/app.yml kit/.env",
+    "# P2: files for symbolic chmod",
+    "mkdir -p team",
+    "touch team/report.txt team/build.sh team/notes.md",
+    "chmod 644 team/report.txt team/build.sh team/notes.md",
+    "# P3: a private file",
+    "echo 'api_key=demo-123' > secret.txt",
+    "# P5: broken permission script",
+    "mkdir -p app/scripts app/config",
+    "printf '#!/bin/bash\\necho \"app started\"\\n' > app/scripts/start.sh",
+    "printf 'port: 8080\\n' > app/config/app.yml",
+    "printf 'DB_PASSWORD=change-me\\n' > app/.env",
+    "printf '%s\\n' '#!/bin/bash' '# Goal: start.sh runnable by everyone, app.yml readable by everyone, .env only for the owner' 'chmod 644 app/scripts/start.sh' 'chmod 755 app/config/app.yml' 'chmod 664 app/.env' './app/scripts/start.sh' > fix-perms.sh",
+    "# P8: folders for special bits",
+    "mkdir -p shared dropbox",
+    "cd ~/bash-practice/day03"
+  ],
+  "warmup": [
+    {
+      "q": "What does `uniq` need before it can remove all duplicates?",
+      "a": "Sorted input. `sort file | uniq` (or `sort -u file`), because `uniq` only removes neighbour duplicates.",
+      "from_day": 2
+    },
+    {
+      "q": "How do you follow a log file live?",
+      "a": "`tail -f app.log` (stop with `Ctrl+C`).",
+      "from_day": 2
+    },
+    {
+      "q": "Where are log files kept? Where are config files kept?",
+      "a": "Logs: `/var/log`. Configs: `/etc`.",
+      "from_day": 1
+    },
+    {
+      "q": "Which command makes a symlink `current` pointing to `releases/v2`?",
+      "a": "`ln -s releases/v2 current` (TARGET first, then the link name).",
+      "from_day": 1
+    }
+  ],
+  "problems": [
+    {
+      "id": "d03p01",
+      "title": "Permission denied: fix it with numbers",
+      "type": "command",
+      "topic": "Permissions",
+      "minutes": 12,
+      "optional": false,
+      "core": true,
+      "workdir": "kit",
+      "situation": "A teammate copied a deploy kit to the server. Running `./deploy.sh` gives `Permission denied`. The `.env` file has a password and must be private. The config can be read by everyone.",
+      "task": [
+        "In `kit`, try `./deploy.sh` and read the error.",
+        "Show permissions of all files with `stat -c '%A %a %n' deploy.sh app.yml .env`.",
+        "Make `deploy.sh` 755, `app.yml` 644 and `.env` 600.",
+        "Show the permissions again and run `./deploy.sh`."
+      ],
+      "hints": [
+        "Each digit is a sum: read = 4, write = 2, execute = 1. The 3 digits are owner, group, others.",
+        "7 = 4+2+1 = rwx. 5 = 4+1 = r-x. 6 = 4+2 = rw-. 0 = ---.",
+        "`chmod 755 deploy.sh`, `chmod 644 app.yml`, `chmod 600 .env`."
+      ],
+      "solution": [
+        "./deploy.sh || echo \"exit code: $?\"",
+        "stat -c '%A %a %n' deploy.sh app.yml .env",
+        "chmod 755 deploy.sh      # rwx r-x r-x : owner can change, everyone can run",
+        "chmod 644 app.yml        # rw- r-- r-- : everyone can read",
+        "chmod 600 .env           # rw- --- --- : only the owner (secrets!)",
+        "stat -c '%A %a %n' deploy.sh app.yml .env",
+        "./deploy.sh"
+      ],
+      "explanation": [
+        {
+          "part": "Permission denied (exit 126)",
+          "meaning": "The file has no `x` (execute) permission. Exit code 126 = found but cannot run."
+        },
+        {
+          "part": "stat -c '%A %a %n'",
+          "meaning": "Show permissions as letters (`%A`), as a number (`%a`), and the name."
+        },
+        {
+          "part": "755",
+          "meaning": "Owner rwx (7), group r-x (5), others r-x (5). Normal for scripts."
+        },
+        {
+          "part": "644",
+          "meaning": "Owner rw- (6), group r-- (4), others r-- (4). Normal for config and web files."
+        },
+        {
+          "part": "600",
+          "meaning": "Owner rw-, nobody else. Use it for secrets, `.env` and SSH private keys."
+        }
+      ],
+      "expected_output": "bash: ./deploy.sh: Permission denied\nexit code: 126\n-rw-r--r-- 644 deploy.sh\n-rw-r--r-- 644 app.yml\n-rw-r--r-- 644 .env\n-rwxr-xr-x 755 deploy.sh\n-rw-r--r-- 644 app.yml\n-rw------- 600 .env\ndeploying todo-api...",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Running `deploy.sh` without `./` gives `deploy.sh: command not found`. The current folder is not in `PATH`.",
+        "Using `chmod 777` to \"fix\" the error. It lets every user change the script. Never use 777 on a server.",
+        "Writing `chmod 0.6.0.0`, or using 8 or 9. Each digit is only 0-7."
+      ],
+      "checks": [
+        {
+          "run": "deploy.sh",
+          "expect": "deploy.sh: command not found"
+        }
+      ],
+      "interview_say": "Permissions are read 4, write 2, execute 1, for owner, group and others. Scripts are usually 755, configs 644, and secrets like `.env` or SSH keys 600.",
+      "try_yourself": "Run `bash deploy.sh` while the file is still 644. Does it work? Why? (Hint: bash reads the file; it does not execute it.)",
+      "table": {
+        "head": [
+          "Number",
+          "Letters",
+          "Meaning"
+        ],
+        "rows": [
+          [
+            "7",
+            "rwx",
+            "read, write, execute"
+          ],
+          [
+            "6",
+            "rw-",
+            "read, write"
+          ],
+          [
+            "5",
+            "r-x",
+            "read, execute"
+          ],
+          [
+            "4",
+            "r--",
+            "read only"
+          ],
+          [
+            "0",
+            "---",
+            "nothing"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d03p02",
+      "title": "Predict the result of chmod with letters",
+      "type": "predict",
+      "topic": "Permissions",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": "team",
+      "situation": "The team shares a folder. A senior engineer prefers letters in `chmod` because they change only one part. The user must predict the new permissions before running each command.",
+      "task": [
+        "All three files start as 644 (`rw-r--r--`).",
+        "Predict the result of: `chmod u+x build.sh`, `chmod g+w report.txt`, `chmod o-r report.txt`, `chmod u=rw,g=r,o= notes.md`, `chmod a+x build.sh`.",
+        "Write your 3-digit answers on paper.",
+        "Run the commands, then check with `stat -c '%a %A %n' *`."
+      ],
+      "hints": [
+        "Who: `u` user (owner), `g` group, `o` others, `a` all. Action: `+` add, `-` remove, `=` set exactly.",
+        "`o=` with nothing after `=` removes all permissions for others.",
+        "build.sh: 644 → 744 → 755. report.txt: 644 → 664 → 660. notes.md: 640."
+      ],
+      "solution": [
+        "chmod u+x build.sh             # owner gets x: rwxr--r-- = 744",
+        "chmod g+w report.txt           # group gets w: rw-rw-r-- = 664",
+        "chmod o-r report.txt           # others lose r: rw-rw---- = 660",
+        "chmod u=rw,g=r,o= notes.md     # set exactly:  rw-r----- = 640",
+        "chmod a+x build.sh             # everyone gets x: rwxr-xr-x = 755",
+        "stat -c '%a %A %n' *"
+      ],
+      "explanation": [
+        {
+          "part": "u / g / o / a",
+          "meaning": "user (owner) / group / others / all three."
+        },
+        {
+          "part": "+ / - / =",
+          "meaning": "add / remove / set exactly (other bits for that who are removed)."
+        },
+        {
+          "part": "u=rw,g=r,o=",
+          "meaning": "Several rules with commas, no spaces."
+        },
+        {
+          "part": "letters vs numbers",
+          "meaning": "Letters change only what the user names. Numbers set all 9 bits at once."
+        }
+      ],
+      "expected_output": "755 -rwxr-xr-x build.sh\n640 -rw-r----- notes.md\n660 -rw-rw---- report.txt",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "A space after the comma: `chmod u=rw, g=r notes.md` gives `chmod: invalid mode: ‘u=rw,’`.",
+        "Thinking `o` means owner. `o` is **others**. Owner is `u` (user)."
+      ],
+      "checks": [
+        {
+          "run": "chmod u=rw, g=r notes.md",
+          "expect": "chmod: invalid mode: ‘u=rw,’"
+        }
+      ],
+      "interview_say": "With letters I change only one part, for example `chmod g+w file` adds write for the group. `u`, `g`, `o` and `a` choose who, and `+`, `-`, `=` choose the action.",
+      "try_yourself": "Run `chmod -x build.sh` and check. Then run `chmod 4755 build.sh` and look at the letters. What is the `s`? (Extra problem E3 explains it.)"
+    },
+    {
+      "id": "d03p03",
+      "title": "Others vs root: who can read a secret?",
+      "type": "concept",
+      "topic": "Permissions",
+      "minutes": 12,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The user wonders: \"If I set my file to 600, can root still read it? And why can every user read `/etc/passwd` but not `/etc/shadow`?\" Interviewers like this question.",
+      "task": [
+        "Compare `/etc/passwd` and `/etc/shadow` with `stat -c '%A %U %G %n' /etc/passwd /etc/shadow`.",
+        "Try `cat /etc/shadow` as the normal user. Read the error.",
+        "Run `chmod 000 secret.txt`, then `cat secret.txt`. The owner is blocked too!",
+        "Give the read permission back to the owner: `chmod 600 secret.txt`, and read it again.",
+        "Read only (do not run if you are not sure): `sudo cat /etc/shadow | head -n 1` works, because root ignores read and write permissions."
+      ],
+      "hints": [
+        "\"Others\" means every user who is not the owner and not in the file's group.",
+        "Linux checks permissions in order: owner? then group? then others. Root skips most checks.",
+        "`/etc/passwd` is 644 (everyone can read user names). `/etc/shadow` is 640 root:shadow (password hashes)."
+      ],
+      "solution": [
+        "stat -c '%A %U %G %n' /etc/passwd /etc/shadow",
+        "cat /etc/shadow || echo \"exit code: $?\"",
+        "chmod 000 secret.txt",
+        "cat secret.txt || echo \"exit code: $?\"",
+        "chmod 600 secret.txt",
+        "cat secret.txt"
+      ],
+      "explanation": [
+        {
+          "part": "/etc/passwd (644)",
+          "meaning": "List of users. Everyone may read it. It has no passwords (only an `x`)."
+        },
+        {
+          "part": "/etc/shadow (640, root:shadow)",
+          "meaning": "Password hashes. Only root and the `shadow` group can read it. A normal user is \"others\" here, and others have `---`."
+        },
+        {
+          "part": "chmod 000",
+          "meaning": "No permissions for anyone, including the owner. The owner can still change permissions back, because the owner owns the file."
+        },
+        {
+          "part": "root",
+          "meaning": "The root user ignores read/write permissions. Only `x` for files needs at least one x bit. So 600 protects from other users, not from root."
+        }
+      ],
+      "expected_output": "-rw-r--r-- root root /etc/passwd\n-rw-r----- root shadow /etc/shadow\ncat: /etc/shadow: Permission denied\nexit code: 1\ncat: secret.txt: Permission denied\nexit code: 1\napi_key=demo-123",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Thinking \"others\" includes root. Others are normal users that are not owner or group. Root is special and ignores most permissions.",
+        "Thinking `chmod 000` locks the file forever. The owner (and root) can always run `chmod` again.",
+        "Running `sudo` for everything. Use it only when a task needs root; mistakes as root break the system."
+      ],
+      "interview_say": "Permissions are checked as owner, then group, then others. Root ignores read and write permissions, so file permissions protect from other users but not from root. That is why we limit who has sudo.",
+      "try_yourself": "Run `ls -l /etc/sudoers` (read only). Who can read it? Why do you think it is so strict?",
+      "table": {
+        "head": [
+          "Word",
+          "Meaning"
+        ],
+        "rows": [
+          [
+            "owner (u)",
+            "the user who owns the file"
+          ],
+          [
+            "group (g)",
+            "users in the file's group"
+          ],
+          [
+            "others (o)",
+            "everyone else (not root!)"
+          ],
+          [
+            "root",
+            "admin user, user id 0, ignores most permissions"
+          ],
+          [
+            "`/`",
+            "root directory: a folder, not a user"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d03p04",
+      "title": "Who am I? id, groups and /etc/passwd",
+      "type": "command",
+      "topic": "Permissions",
+      "minutes": 10,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A Jenkins job fails with `Permission denied` when it writes to a folder. The first question is always: which user runs the job, and which groups does it have?",
+      "task": [
+        "Print your user name with `whoami` and your ids with `id`.",
+        "Print your groups with `groups`.",
+        "Find your line in `/etc/passwd` with `grep \"^$USER:\" /etc/passwd`. Read the 7 fields.",
+        "List all user names and their shells: `cut -d: -f1,7 /etc/passwd | head -n 3`.",
+        "Show the members of the `sudo` group: `getent group sudo`."
+      ],
+      "hints": [
+        "`/etc/passwd` fields are separated by `:`.",
+        "The fields are: name : x : user id : group id : comment : home : shell.",
+        "`cut -d: -f1,7` takes fields 1 and 7 with `:` as the separator."
+      ],
+      "solution": [
+        "whoami",
+        "id",
+        "groups",
+        "grep \"^$USER:\" /etc/passwd",
+        "cut -d: -f1,7 /etc/passwd | head -n 3",
+        "getent group sudo"
+      ],
+      "explanation": [
+        {
+          "part": "whoami",
+          "meaning": "Current user name."
+        },
+        {
+          "part": "id",
+          "meaning": "User id (uid), main group id (gid), and all groups."
+        },
+        {
+          "part": "groups",
+          "meaning": "Only the group names."
+        },
+        {
+          "part": "^$USER:",
+          "meaning": "`^` = start of line. Double quotes let bash put the user name into the pattern."
+        },
+        {
+          "part": "/etc/passwd fields",
+          "meaning": "name:x:uid:gid:comment:home:shell. The `x` means the password is in `/etc/shadow`."
+        },
+        {
+          "part": "getent group sudo",
+          "meaning": "Show a group line from `/etc/group`: name:x:gid:members."
+        }
+      ],
+      "expected_output": "wicky\nuid=30033(wicky) gid=30033(wicky) groups=30033(wicky)\nwicky\nwicky:x:30033:30033::/home/wicky:/bin/bash\nroot:/bin/bash\ndaemon:/usr/sbin/nologin\nbin:/usr/sbin/nologin\nsudo:x:27:ubuntu",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "This output is from the sandbox. On WSL the user id is usually 1000, `groups` shows more groups (like `adm sudo`), and the `sudo` line lists `wicky`.",
+      "verified": true,
+      "mistakes": [
+        "Using single quotes: `grep '^$USER:' /etc/passwd` finds nothing, because `$USER` is not expanded inside single quotes.",
+        "After `usermod -aG docker wicky`, `groups` still does not show `docker`. The new group works only after a new login (or `newgrp docker`)."
+      ],
+      "checks": [
+        {
+          "run": "grep '^$USER:' /etc/passwd || echo 'no match'",
+          "expect": "no match"
+        }
+      ],
+      "interview_say": "When I see `Permission denied`, I check which user runs the process with `id`, then compare it with the owner and permissions of the file using `ls -l`.",
+      "try_yourself": "Run `grep -c /bin/bash /etc/passwd`. How many users have bash as their login shell?"
+    },
+    {
+      "id": "d03p05",
+      "title": "Find the bug: the permission fix script",
+      "type": "fix-bug",
+      "topic": "Permissions",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate wrote `fix-perms.sh` before the release. The goal is in the comment. After running it, `start.sh` cannot run and the password file is readable by the group.",
+      "task": [
+        "Read the script with `cat fix-perms.sh`. Compare each line with the goal.",
+        "Run it with `bash fix-perms.sh` and read the error.",
+        "Fix the three numbers. Run it again.",
+        "Check the result with `stat -c '%a %n' app/scripts/start.sh app/config/app.yml app/.env`."
+      ],
+      "hints": [
+        "\"Runnable by everyone\" needs x for owner, group and others.",
+        "A config file does not need `x`. A secret must have 0 for group and others.",
+        "start.sh → 755, app.yml → 644, .env → 600."
+      ],
+      "solution": [
+        "bash fix-perms.sh || echo \"exit code: $?\"",
+        "cat > fix-perms.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Goal: start.sh runnable by everyone, app.yml readable by everyone, .env only for the owner",
+        "chmod 755 app/scripts/start.sh",
+        "chmod 644 app/config/app.yml",
+        "chmod 600 app/.env",
+        "./app/scripts/start.sh",
+        "EOF",
+        "bash fix-perms.sh",
+        "stat -c '%a %n' app/scripts/start.sh app/config/app.yml app/.env"
+      ],
+      "explanation": [
+        {
+          "part": "chmod 755 start.sh",
+          "meaning": "Bug 1: 644 has no `x`, so `./start.sh` gave `Permission denied`."
+        },
+        {
+          "part": "chmod 644 app.yml",
+          "meaning": "Bug 2: 755 made a config file executable. It works, but it is wrong and a security smell."
+        },
+        {
+          "part": "chmod 600 .env",
+          "meaning": "Bug 3: 664 let the group read and even write the password."
+        }
+      ],
+      "expected_output": "fix-perms.sh: line 6: ./app/scripts/start.sh: Permission denied\nexit code: 126\napp started\n755 app/scripts/start.sh\n644 app/config/app.yml\n600 app/.env",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Only fixing the line that shows an error. Bugs 2 and 3 give no error at all; they are security problems. Read the whole script.",
+        "Using `chmod -R 755 app` for everything. Then `.env` and configs become executable and readable by all."
+      ],
+      "interview_say": "Not every permission bug shows an error. A secret with 664 works fine but is a security risk, so I check secrets are 600 and only scripts have the execute bit.",
+      "try_yourself": "Write a one-line check that prints `.env is safe` only if its permission is 600: `[ \"$(stat -c %a app/.env)\" = 600 ] && echo \".env is safe\"`."
+    },
+    {
+      "id": "d03p06",
+      "title": "Users, groups, chown and sudo (on WSL only)",
+      "type": "command",
+      "topic": "Permissions",
+      "minutes": 12,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team adds a `deploybot` user for automatic deploys and a `devops` group. The release folder must belong to `deploybot` and the `devops` group. This needs `sudo`, so it is not run in the sandbox.",
+      "task": [
+        "**Warning:** these commands change users on your WSL machine. They are safe, and the last step removes everything again.",
+        "Create the user: `sudo useradd -m -s /bin/bash deploybot`. Check with `id deploybot`.",
+        "Create a group and add the user: `sudo groupadd devops`, `sudo usermod -aG devops deploybot`, then `groups deploybot`.",
+        "Create `release/app.jar`. Give the folder to the bot: `sudo chown -R deploybot:devops release`.",
+        "Change only the group of one file: `sudo chgrp wicky release/app.jar`. Check with `stat`.",
+        "Clean up: `sudo userdel -r deploybot` and `sudo groupdel devops`."
+      ],
+      "hints": [
+        "`useradd -m` creates the home folder; `-s` sets the login shell.",
+        "`usermod -aG group user`: `-a` (append) is very important. Without it the user loses other groups.",
+        "`chown user:group path` changes owner and group. `chgrp group path` changes only the group."
+      ],
+      "solution": [
+        "sudo useradd -m -s /bin/bash deploybot",
+        "id deploybot",
+        "sudo groupadd devops",
+        "sudo usermod -aG devops deploybot",
+        "groups deploybot",
+        "getent group devops",
+        "mkdir -p release && touch release/app.jar",
+        "sudo chown -R deploybot:devops release",
+        "stat -c '%A %U %G %n' release release/app.jar",
+        "sudo chgrp wicky release/app.jar",
+        "stat -c '%A %U %G %n' release/app.jar",
+        "grep deploybot /etc/passwd",
+        "# clean up",
+        "sudo userdel -r deploybot",
+        "sudo groupdel devops",
+        "id deploybot"
+      ],
+      "explanation": [
+        {
+          "part": "useradd -m -s /bin/bash",
+          "meaning": "Create a user with a home folder and bash as shell."
+        },
+        {
+          "part": "groupadd devops",
+          "meaning": "Create a new group."
+        },
+        {
+          "part": "usermod -aG devops deploybot",
+          "meaning": "Add the user to one more group. `-a` = append, keep old groups."
+        },
+        {
+          "part": "chown -R user:group",
+          "meaning": "Change owner and group of a folder and everything inside (`-R`)."
+        },
+        {
+          "part": "chgrp",
+          "meaning": "Change only the group."
+        },
+        {
+          "part": "userdel -r",
+          "meaning": "Delete the user and the home folder."
+        }
+      ],
+      "expected_output": "",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "This output was recorded as root in a test container, not by verify.py. On WSL the ids are usually 1001 and 1002, and `sudo` asks for the user's password first.",
+      "verified": false,
+      "typical_output": "uid=30034(deploybot) gid=30034(deploybot) groups=30034(deploybot)\ndeploybot : deploybot devops\ndevops:x:30035:deploybot\ndrwxr-xr-x deploybot devops release\n-rw-r--r-- deploybot devops release/app.jar\n-rw-r--r-- deploybot wicky release/app.jar\ndeploybot:x:30034:30034::/home/deploybot:/bin/bash\nuserdel: deploybot mail spool (/var/mail/deploybot) not found\nid: ‘deploybot’: no such user",
+      "mistakes": [
+        "`usermod -G devops deploybot` without `-a` removes the user from all other extra groups.",
+        "Running `chown` without sudo gives `chown: changing ownership of 'release': Operation not permitted`.",
+        "Forgetting that a group change needs a new login: the user must log out and in, or run `newgrp devops`."
+      ],
+      "interview_say": "I create service users with `useradd`, add them to groups with `usermod -aG`, and give folders to them with `chown -R user:group`. I never forget the `-a`.",
+      "try_yourself": "After step 3, run `sudo -u deploybot whoami`. `sudo -u` runs one command as another user."
+    },
+    {
+      "id": "d03p07",
+      "title": "Why new files are 644: umask",
+      "type": "predict",
+      "topic": "Permissions",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Log files created by the backend are readable by every user on the server. The security team wants new files to be private to the owner and the group. This is controlled by `umask`.",
+      "task": [
+        "Set the normal umask with `umask 022` and print it with `umask`.",
+        "Create `a.log` and folder `adir`. Check their permissions.",
+        "In a subshell `( ... )`, set `umask 027`, then create `b.log` and `bdir`. Predict the permissions first.",
+        "Check all four with `stat -c '%a %n' a.log adir b.log bdir`."
+      ],
+      "hints": [
+        "New files start from 666, new folders from 777. The umask removes bits.",
+        "666 - 022 = 644 and 777 - 022 = 755.",
+        "With 027: files 640, folders 750."
+      ],
+      "solution": [
+        "umask 022",
+        "umask",
+        "touch a.log && mkdir adir",
+        "( umask 027; touch b.log; mkdir bdir )     # only inside the ( ) subshell",
+        "stat -c '%a %n' a.log adir b.log bdir",
+        "umask                                     # still 0022 out here"
+      ],
+      "explanation": [
+        {
+          "part": "umask",
+          "meaning": "A mask of bits to remove from new files and folders."
+        },
+        {
+          "part": "666 / 777",
+          "meaning": "Start values: new files never get `x` automatically; new folders start with all bits."
+        },
+        {
+          "part": "022",
+          "meaning": "Remove write for group and others: files 644, folders 755."
+        },
+        {
+          "part": "027",
+          "meaning": "Remove write for group, and everything for others: files 640, folders 750."
+        },
+        {
+          "part": "( ... )",
+          "meaning": "Subshell: the umask change stays inside and does not change the main shell."
+        }
+      ],
+      "expected_output": "0022\n644 a.log\n755 adir\n640 b.log\n750 bdir\n0022",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "On some Ubuntu setups the default umask is 0002. That is why the solution sets 022 first.",
+      "verified": true,
+      "mistakes": [
+        "Thinking umask is a permission. It is the opposite: the bits to take away.",
+        "Setting `umask 027` in a terminal and expecting it to last. Put it in `~/.bashrc` or in the service file."
+      ],
+      "interview_say": "The umask removes bits from the default 666 for files and 777 for folders. With umask 022 new files are 644 and new folders 755.",
+      "try_yourself": "What do you get with `umask 077`? Predict, then test in a subshell."
+    },
+    {
+      "id": "d03p08",
+      "title": "Special bits: setuid, setgid, sticky",
+      "type": "concept",
+      "topic": "Permissions",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "In an interview the user sees `-rwsr-xr-x` and `drwxrwxrwt` and is asked what `s` and `t` mean. The user learns it with read-only commands and two practice folders.",
+      "task": [
+        "Look at `stat -c '%A %a %n' /usr/bin/passwd /tmp` (read only).",
+        "Set the setgid bit on your folder `shared`: `chmod g+s shared`.",
+        "Set the sticky bit on your folder `dropbox`: `chmod +t dropbox`.",
+        "Check both with `stat -c '%A %a %n' shared dropbox`."
+      ],
+      "hints": [
+        "`s` in the owner part = setuid: the program runs with the owner's rights (root for `passwd`).",
+        "`s` in the group part on a folder = setgid: new files get the folder's group.",
+        "`t` at the end = sticky: in a shared folder like `/tmp`, users can delete only their own files."
+      ],
+      "solution": [
+        "stat -c '%A %a %n' /usr/bin/passwd /tmp",
+        "chmod g+s shared",
+        "chmod +t dropbox",
+        "stat -c '%A %a %n' shared dropbox"
+      ],
+      "explanation": [
+        {
+          "part": "4755 (rws)",
+          "meaning": "setuid. `passwd` must write `/etc/shadow`, so it runs as root for every user."
+        },
+        {
+          "part": "2755 (rws in group)",
+          "meaning": "setgid on a folder: files created inside get the folder's group. Good for team folders."
+        },
+        {
+          "part": "1777 (rwt)",
+          "meaning": "sticky bit on `/tmp`: everyone can write, but only the owner can delete a file."
+        }
+      ],
+      "expected_output": "-rwsr-xr-x 4755 /usr/bin/passwd\ndrwxrwxrwt 1777 /tmp\ndrwxr-sr-x 2755 shared\ndrwxr-xr-t 1755 dropbox",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Setting setuid on shell scripts. Linux ignores setuid on scripts, and on programs it is a big security risk.",
+        "Reading `T` (capital) as the same as `t`. Capital means the bit is set but `x` is missing for that part."
+      ],
+      "interview_say": "setuid lets a program run with its owner's rights, like `passwd`. setgid on a folder keeps the group for new files. The sticky bit on `/tmp` stops users deleting each other's files.",
+      "try_yourself": "Run `find /usr/bin -perm -4000 | head -n 5`. These are all setuid programs on the system."
+    }
+  ],
+  "interview": [
+    {
+      "q": "What does `chmod 755` mean?",
+      "a": "Owner read, write, execute (7). Group read and execute (5). Others read and execute (5). Typical for scripts and folders.",
+      "topic": "Permissions"
+    },
+    {
+      "q": "What permission should an SSH private key or a `.env` file have?",
+      "a": "600: only the owner can read and write. SSH even refuses a private key that others can read.",
+      "topic": "Permissions"
+    },
+    {
+      "q": "What does `chmod g+w file` do?",
+      "a": "It adds write permission for the group and changes nothing else.",
+      "topic": "Permissions"
+    },
+    {
+      "q": "Can root read a file with permission 600 owned by another user?",
+      "a": "Yes. Root ignores read and write permissions. File permissions protect from other normal users, not from root.",
+      "topic": "Permissions"
+    },
+    {
+      "q": "How do you add an existing user to the docker group?",
+      "a": "`sudo usermod -aG docker username`. The `-a` keeps the old groups. The user must log in again for it to work.",
+      "topic": "Permissions"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "chmod 755 / 644 / 600",
+      "meaning": "Set permissions with numbers (r=4 w=2 x=1)",
+      "example": "chmod 600 .env",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "chmod u+x",
+      "meaning": "Add execute for the owner",
+      "example": "chmod u+x deploy.sh",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "chmod g+w,o-r",
+      "meaning": "Change only group and others",
+      "example": "chmod g+w,o-r report.txt",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "stat -c '%a %A %n'",
+      "meaning": "Show permission number and letters",
+      "example": "stat -c '%a %A %n' *",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "umask",
+      "meaning": "Bits removed from new files (666) and folders (777)",
+      "example": "umask 027",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "whoami / id / groups",
+      "meaning": "Current user, ids, groups",
+      "example": "id",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "getent group",
+      "meaning": "Show a group and its members",
+      "example": "getent group sudo",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "useradd -m -s",
+      "meaning": "Create a user with home and shell",
+      "example": "sudo useradd -m -s /bin/bash deploybot",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "usermod -aG",
+      "meaning": "Add user to a group (keep old groups)",
+      "example": "sudo usermod -aG docker wicky",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "chown -R user:group",
+      "meaning": "Change owner and group",
+      "example": "sudo chown -R www-data:www-data /var/www",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "chgrp",
+      "meaning": "Change only the group",
+      "example": "sudo chgrp devops app.jar",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "sudo",
+      "meaning": "Run one command as root",
+      "example": "sudo cat /etc/shadow",
+      "topic": "Permissions"
+    },
+    {
+      "cmd": "chmod g+s / +t",
+      "meaning": "setgid folder / sticky bit",
+      "example": "chmod +t dropbox",
+      "topic": "Permissions"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "chmod with numbers",
+      "problems": [
+        "d03p01",
+        "d03p05"
+      ]
+    },
+    {
+      "item": "chmod with letters",
+      "problems": [
+        "d03p02",
+        "d03p08"
+      ]
+    },
+    {
+      "item": "chown, chgrp",
+      "problems": [
+        "d03p06"
+      ]
+    },
+    {
+      "item": "umask",
+      "problems": [
+        "d03p07"
+      ]
+    },
+    {
+      "item": "useradd, usermod, groups, id",
+      "problems": [
+        "d03p04",
+        "d03p06"
+      ]
+    },
+    {
+      "item": "/etc/passwd, /etc/group",
+      "problems": [
+        "d03p03",
+        "d03p04",
+        "d03p06"
+      ]
+    },
+    {
+      "item": "sudo",
+      "problems": [
+        "d03p03",
+        "d03p06"
+      ]
+    },
+    {
+      "item": "setuid, setgid, sticky bit (read-only demos)",
+      "problems": [
+        "d03p08"
+      ]
+    },
+    {
+      "item": "root vs \"others\" rule",
+      "problems": [
+        "d03p03"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day03"
+}

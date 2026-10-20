@@ -1,0 +1,714 @@
+{
+  "day": 10,
+  "week": 2,
+  "title": "grep and regular expressions",
+  "goal": "Find exactly the lines and values you need in logs and configs with grep options and regular expressions.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day10/logs ~/bash-practice/day10/configs && cd ~/bash-practice/day10",
+    "# P1: backend log with a Java-style stack trace",
+    "printf '%s\\n' '2026-10-20 09:00:01 INFO  OrderService started' '2026-10-20 09:02:15 INFO  GET /api/orders 200' '2026-10-20 09:02:16 WARN  retrying payment call' '2026-10-20 09:02:17 ERROR PaymentClient failed' 'java.net.SocketTimeoutException: Read timed out' '    at PaymentClient.call(PaymentClient.java:42)' '    at OrderService.pay(OrderService.java:88)' '2026-10-20 09:03:00 INFO  GET /api/orders 200' '2026-10-20 09:05:40 ERROR Database pool exhausted' '2026-10-20 09:05:41 INFO  pool size raised to 30' > logs/orders.log",
+    "# P2: configs that mention database hosts",
+    "printf '%s\\n' 'db_host=db01.internal' 'db_port=5432' > configs/orders.conf",
+    "printf '%s\\n' 'db_host=db01.internal' 'cache=redis01' > configs/payments.conf",
+    "printf '%s\\n' 'db_host=db011.internal' 'note: db01 is old' > configs/reports.conf",
+    "printf '%s\\n' 'cache=redis01' > configs/web.conf",
+    "# P3: nginx access log with response times",
+    "printf '%s\\n' '10.0.0.5 - - [20/Oct/2026:09:00:01] \"GET /api/todos HTTP/1.1\" 200 512 time=35ms' '10.0.0.7 - - [20/Oct/2026:09:00:02] \"POST /api/todos HTTP/1.1\" 201 128 time=120ms' '192.168.1.20 - - [20/Oct/2026:09:00:03] \"GET /api/todos HTTP/1.1\" 500 64 time=2300ms' '10.0.0.5 - - [20/Oct/2026:09:00:04] \"GET /health HTTP/1.1\" 200 2 time=1ms' '10.0.0.55 - - [20/Oct/2026:09:00:05] \"DELETE /api/todos/7 HTTP/1.1\" 204 0 time=40ms' '192.168.1.20 - - [20/Oct/2026:09:00:06] \"GET /api/todos HTTP/1.1\" 500 64 time=1900ms' > logs/access.log",
+    "# P4: sshd-style config with comments and empty lines",
+    "printf '%s\\n' '# Example SSH server config (practice copy)' '' 'Port 22' '#PermitRootLogin yes' 'PermitRootLogin no' '' '   # indented comment' 'PasswordAuthentication no' 'MaxAuthTries 3' > configs/sshd_config.copy",
+    "# P5: broken alert script",
+    "printf '%s\\n' '2026-10-20 10:00:00 ERROR disk write failed' '2026-10-20 10:00:05 FATAL kernel panic on node-3' '2026-10-20 10:00:09 INFO request from 10.0.0.5' '2026-10-20 10:00:10 INFO request from 10.0.0.50' '2026-10-20 10:00:12 INFO request from 10a0b0c5' '2026-10-20 10:00:20 WARN Timeout calling api' '2026-10-20 10:00:21 WARN timeout calling db' > logs/node.log",
+    "printf '%s\\n' '#!/bin/bash' '# 1) count lines with ERROR or FATAL' '# 2) show requests from the IP 10.0.0.5 only' '# 3) count timeout warnings (any case)' 'echo \"errors: $(grep -c \"ERROR|FATAL\" logs/node.log)\"' 'grep \"10.0.0.5\" logs/node.log' 'echo \"timeouts: $(grep -c \"timeout\" logs/node.log)\"' > alert.sh",
+    "# P6: text with special characters",
+    "printf '%s\\n' '[ERROR] price is $5.00' 'ERROR price is 5x00' 'path a.b*c found' > special.txt",
+    "cd ~/bash-practice/day10"
+  ],
+  "warmup": [
+    {
+      "q": "How does a function give back a string?",
+      "a": "It prints it with `echo`; the caller catches it with `VAR=$(func)`. `return` is only for exit codes 0-255.",
+      "from_day": 9
+    },
+    {
+      "q": "Which loop reads a file line by line safely?",
+      "a": "`while IFS= read -r line; do ...; done < file`",
+      "from_day": 8
+    },
+    {
+      "q": "How do you count ERROR lines in a log?",
+      "a": "`grep -c ERROR app.log`",
+      "from_day": 2
+    },
+    {
+      "q": "Which grep option hides lines that match?",
+      "a": "`-v` (invert)",
+      "from_day": 2
+    }
+  ],
+  "problems": [
+    {
+      "id": "d10p01",
+      "title": "Errors with context: -n -A -B -C",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The Spring Boot order service failed a payment. `grep ERROR` shows one line, but the real reason (the exception and the stack trace) is in the lines after it. The user also wants the line before each error.",
+      "task": [
+        "Show ERROR lines with line numbers (`-n`).",
+        "Show each ERROR line plus the 3 lines after it (`-A 3`).",
+        "Show each ERROR line plus 1 line before it (`-B 1`).",
+        "Show 1 line before and after (`-C 1`) for `Timeout`, ignoring case."
+      ],
+      "hints": [
+        "A = after, B = before, C = context (both sides).",
+        "grep prints `--` between groups that are not next to each other.",
+        "`grep -n -A 3 ERROR logs/orders.log`"
+      ],
+      "solution": [
+        "grep -n ERROR logs/orders.log",
+        "echo \"=== -A 3 ===\"",
+        "grep -A 3 ERROR logs/orders.log",
+        "echo \"=== -B 1 ===\"",
+        "grep -B 1 ERROR logs/orders.log",
+        "echo \"=== -i -C 1 timeout ===\"",
+        "grep -i -C 1 timeout logs/orders.log"
+      ],
+      "explanation": [
+        {
+          "part": "-n",
+          "meaning": "Line numbers. Then the user can open the file at that line (`less +N file`)."
+        },
+        {
+          "part": "-A 3",
+          "meaning": "Also print 3 lines After each match: the exception and the stack trace."
+        },
+        {
+          "part": "-B 1",
+          "meaning": "Also print 1 line Before each match: what happened just before."
+        },
+        {
+          "part": "-C 1",
+          "meaning": "Context: 1 line before and 1 after."
+        },
+        {
+          "part": "--",
+          "meaning": "Separator between groups of lines that are far apart."
+        }
+      ],
+      "expected_output": "4:2026-10-20 09:02:17 ERROR PaymentClient failed\n9:2026-10-20 09:05:40 ERROR Database pool exhausted\n=== -A 3 ===\n2026-10-20 09:02:17 ERROR PaymentClient failed\njava.net.SocketTimeoutException: Read timed out\n    at PaymentClient.call(PaymentClient.java:42)\n    at OrderService.pay(OrderService.java:88)\n--\n2026-10-20 09:05:40 ERROR Database pool exhausted\n2026-10-20 09:05:41 INFO  pool size raised to 30\n=== -B 1 ===\n2026-10-20 09:02:16 WARN  retrying payment call\n2026-10-20 09:02:17 ERROR PaymentClient failed\n--\n2026-10-20 09:03:00 INFO  GET /api/orders 200\n2026-10-20 09:05:40 ERROR Database pool exhausted\n=== -i -C 1 timeout ===\n2026-10-20 09:02:17 ERROR PaymentClient failed\njava.net.SocketTimeoutException: Read timed out\n    at PaymentClient.call(PaymentClient.java:42)",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `grep -A3B1`. Options with numbers must be separate: `grep -A 3 -B 1`.",
+        "Using `-c` together with `-A`: `-c` only counts and ignores the context."
+      ],
+      "interview_say": "When I search errors, I use `-A` and `-B` to see the stack trace and what happened before, and `-n` to know the line number.",
+      "try_yourself": "Run `grep -n -A 2 'Exception' logs/orders.log`. Then find which Java file and line number caused it."
+    },
+    {
+      "id": "d10p02",
+      "title": "Search many files: -r -l -c -w",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The old database server `db01` is being shut down. The user must find every config file that still uses it as `db_host`. Careful: `db011` is a different server, and a comment line only mentions `db01`.",
+      "task": [
+        "Search all files in `configs/` for `db01` with `-r`. Look at the result.",
+        "Show only the file names with `-l`.",
+        "Use `-w` (whole word) for `db01`. `reports.conf` uses `db011`, but it is still listed. Why?",
+        "Count matches per file with `-c`.",
+        "Find only real settings: lines that start with `db_host=db01.`."
+      ],
+      "hints": [
+        "`-r` = recursive (all files in all sub-folders).",
+        "`-w` matches only whole words: `db011` is not the word `db01`.",
+        "For the last step use an anchor and escape the dot: `grep -rl '^db_host=db01\\.' configs`."
+      ],
+      "solution": [
+        "grep -r db01 configs | sort",
+        "echo \"=== -l ===\"",
+        "grep -rl db01 configs | sort",
+        "echo \"=== -w ===\"",
+        "grep -rlw db01 configs | sort",
+        "echo \"=== -c ===\"",
+        "grep -rc db01 configs | sort",
+        "echo \"=== real settings ===\"",
+        "grep -rl '^db_host=db01\\.' configs | sort"
+      ],
+      "explanation": [
+        {
+          "part": "-r",
+          "meaning": "Search all files under a folder. Each line starts with `file:`."
+        },
+        {
+          "part": "-l",
+          "meaning": "Print only names of files that match (good for a to-do list)."
+        },
+        {
+          "part": "-w",
+          "meaning": "Whole word only. `db011` no longer matches, but `reports.conf` stays in the list because its comment line has the whole word `db01`."
+        },
+        {
+          "part": "-c with -r",
+          "meaning": "Count per file, also files with 0."
+        },
+        {
+          "part": "^db_host=db01\\.",
+          "meaning": "Line starts with `db_host=db01.`. `\\.` is a real dot."
+        },
+        {
+          "part": "| sort",
+          "meaning": "grep -r reads files in folder order, which can differ. `sort` makes the output stable."
+        }
+      ],
+      "expected_output": "configs/orders.conf:db_host=db01.internal\nconfigs/payments.conf:db_host=db01.internal\nconfigs/reports.conf:db_host=db011.internal\nconfigs/reports.conf:note: db01 is old\n=== -l ===\nconfigs/orders.conf\nconfigs/payments.conf\nconfigs/reports.conf\n=== -w ===\nconfigs/orders.conf\nconfigs/payments.conf\nconfigs/reports.conf\n=== -c ===\nconfigs/orders.conf:1\nconfigs/payments.conf:1\nconfigs/reports.conf:2\nconfigs/sshd_config.copy:0\nconfigs/web.conf:0\n=== real settings ===\nconfigs/orders.conf\nconfigs/payments.conf",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting `-r` with a folder: `grep: configs: Is a directory`.",
+        "Searching `db01` without `-w` or anchors and changing `db011` by mistake in a bulk edit."
+      ],
+      "checks": [
+        {
+          "run": "grep db01 configs",
+          "expect": "grep: configs: Is a directory"
+        }
+      ],
+      "interview_say": "I use `grep -rl` to list the files that contain a string, `-w` to avoid partial matches, and anchors like `^` to match only real settings, not comments.",
+      "try_yourself": "Use `grep -rL db01 configs` (capital L). What does it list?"
+    },
+    {
+      "id": "d10p03",
+      "title": "Extract values with -o and -E",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 14,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The API is slow. The user must pull out only the useful values from the access log: the IP addresses, the response times, and the slow requests over one second. `grep -o` prints only the matching part, not the whole line.",
+      "task": [
+        "Print all IP addresses (only the IP) with `grep -oE`.",
+        "Count requests per IP (sorted).",
+        "Print only the `time=...ms` part of each line.",
+        "Show full lines where the time has 4 or more digits (1000 ms or more).",
+        "Count the 5xx status codes with a regex."
+      ],
+      "hints": [
+        "IP pattern: `[0-9]{1,3}(\\.[0-9]{1,3}){3}` (1-3 digits, then 3 times dot + 1-3 digits). Use it with `^` because the IP is at the start.",
+        "`{4,}` means 4 or more times: `time=[0-9]{4,}ms`.",
+        "Status codes are after the closing quote: `\" 5[0-9]{2} `."
+      ],
+      "solution": [
+        "grep -oE '^[0-9]{1,3}(\\.[0-9]{1,3}){3}' logs/access.log",
+        "echo \"=== requests per IP ===\"",
+        "grep -oE '^[0-9]{1,3}(\\.[0-9]{1,3}){3}' logs/access.log | sort | uniq -c | sort -rn",
+        "echo \"=== response times ===\"",
+        "grep -oE 'time=[0-9]+ms' logs/access.log",
+        "echo \"=== slow requests (>= 1000 ms) ===\"",
+        "grep -E 'time=[0-9]{4,}ms' logs/access.log",
+        "echo \"=== 5xx count ===\"",
+        "grep -cE '\" 5[0-9]{2} ' logs/access.log"
+      ],
+      "explanation": [
+        {
+          "part": "-o",
+          "meaning": "Print only the matching text, one match per line."
+        },
+        {
+          "part": "-E",
+          "meaning": "Extended regex: `+ ? {n,m} ( ) |` work without backslashes."
+        },
+        {
+          "part": "[0-9]{1,3}",
+          "meaning": "A digit, 1 to 3 times."
+        },
+        {
+          "part": "(\\.[0-9]{1,3}){3}",
+          "meaning": "A group: a real dot and 1-3 digits, repeated 3 times."
+        },
+        {
+          "part": "[0-9]+",
+          "meaning": "One or more digits."
+        },
+        {
+          "part": "{4,}",
+          "meaning": "4 or more times, so 1000 and more."
+        },
+        {
+          "part": "sort -rn",
+          "meaning": "Sort numbers, biggest first (Day 12)."
+        }
+      ],
+      "expected_output": "10.0.0.5\n10.0.0.7\n192.168.1.20\n10.0.0.5\n10.0.0.55\n192.168.1.20\n=== requests per IP ===\n      2 192.168.1.20\n      2 10.0.0.5\n      1 10.0.0.7\n      1 10.0.0.55\n=== response times ===\ntime=35ms\ntime=120ms\ntime=2300ms\ntime=1ms\ntime=40ms\ntime=1900ms\n=== slow requests (>= 1000 ms) ===\n192.168.1.20 - - [20/Oct/2026:09:00:03] \"GET /api/todos HTTP/1.1\" 500 64 time=2300ms\n192.168.1.20 - - [20/Oct/2026:09:00:06] \"GET /api/todos HTTP/1.1\" 500 64 time=1900ms\n=== 5xx count ===\n2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Without `-E`, `+` and `{3}` are normal characters in basic grep. `grep -o 'time=[0-9]+ms'` finds nothing.",
+        "Using `.` for a dot: `10.0.0.5` also matches `10a0b0c5`. Escape it: `10\\.0\\.0\\.5`.",
+        "Forgetting the anchor: the IP pattern also finds numbers inside the date or URL in other logs."
+      ],
+      "checks": [
+        {
+          "run": "grep -o 'time=[0-9]+ms' logs/access.log || echo 'no match'",
+          "expect": "no match"
+        }
+      ],
+      "interview_say": "I use `grep -oE` to extract only the values I need, like IPs or response times, then `sort | uniq -c` to count them. `-E` enables extended regex with `+`, `{n}` and groups.",
+      "try_yourself": "Extract only the numbers: `grep -oE 'time=[0-9]+' logs/access.log | grep -oE '[0-9]+'`. Then add them up in Day 11 with awk."
+    },
+    {
+      "id": "d10p04",
+      "title": "Anchors and classes: only the real settings",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A security audit asks: \"Show the active SSH settings, without comments and empty lines.\" The file is a practice copy `configs/sshd_config.copy`. Comments can be indented. The user also checks for `PermitRootLogin`.",
+      "task": [
+        "Print the file without empty lines (`^$`).",
+        "Print it without comment lines too. Use one `grep -Ev` with `^[[:space:]]*(#|$)`.",
+        "Print only lines that start with a capital letter (`^[A-Z]`).",
+        "Show the active `PermitRootLogin` line (not the commented one).",
+        "Find setting lines that end with a number (`[0-9]+$`)."
+      ],
+      "hints": [
+        "`^` = start of the line, `$` = end. `^$` = an empty line.",
+        "`[[:space:]]*` = zero or more spaces or tabs. It catches indented comments.",
+        "`grep '^PermitRootLogin'` does not match `#PermitRootLogin` because `#` is first."
+      ],
+      "solution": [
+        "grep -v '^$' configs/sshd_config.copy",
+        "echo \"=== no comments, no empty lines ===\"",
+        "grep -Ev '^[[:space:]]*(#|$)' configs/sshd_config.copy",
+        "echo \"=== lines starting with a capital ===\"",
+        "grep '^[A-Z]' configs/sshd_config.copy",
+        "echo \"=== active PermitRootLogin ===\"",
+        "grep '^PermitRootLogin' configs/sshd_config.copy",
+        "echo \"=== ends with a number ===\"",
+        "grep -E '[0-9]+$' configs/sshd_config.copy"
+      ],
+      "explanation": [
+        {
+          "part": "^$",
+          "meaning": "An empty line: start and end with nothing between."
+        },
+        {
+          "part": "^[[:space:]]*(#|$)",
+          "meaning": "Line that is only spaces, or spaces then `#`. With `-v` these are removed."
+        },
+        {
+          "part": "[A-Z]",
+          "meaning": "One capital letter. `[[:upper:]]` is the same."
+        },
+        {
+          "part": "[0-9]+$",
+          "meaning": "One or more digits at the end of the line."
+        }
+      ],
+      "expected_output": "# Example SSH server config (practice copy)\nPort 22\n#PermitRootLogin yes\nPermitRootLogin no\n   # indented comment\nPasswordAuthentication no\nMaxAuthTries 3\n=== no comments, no empty lines ===\nPort 22\nPermitRootLogin no\nPasswordAuthentication no\nMaxAuthTries 3\n=== lines starting with a capital ===\nPort 22\nPermitRootLogin no\nPasswordAuthentication no\nMaxAuthTries 3\n=== active PermitRootLogin ===\nPermitRootLogin no\n=== ends with a number ===\nPort 22\nMaxAuthTries 3",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `grep -v '#'`: it also removes setting lines that have a `#` later in the line.",
+        "Thinking `*` in regex means \"any text\" like in file globs. In regex, `.*` means any text."
+      ],
+      "interview_say": "To see active config lines I use `grep -Ev '^[[:space:]]*(#|$)' file`. It removes comments, indented comments and empty lines.",
+      "try_yourself": "On your real WSL, run the same command on `/etc/ssh/sshd_config` if it exists (read only, no sudo needed for most systems). Compare.",
+      "table": {
+        "head": [
+          "Regex",
+          "Meaning"
+        ],
+        "rows": [
+          [
+            "`.`",
+            "any one character"
+          ],
+          [
+            "`*`",
+            "previous item 0 or more times"
+          ],
+          [
+            "`+` (-E)",
+            "1 or more times"
+          ],
+          [
+            "`?` (-E)",
+            "0 or 1 time"
+          ],
+          [
+            "`^` / `$`",
+            "start / end of line"
+          ],
+          [
+            "`[abc]` / `[^abc]`",
+            "one of / none of"
+          ],
+          [
+            "`[[:digit:]]` `[[:space:]]`",
+            "digit / space or tab"
+          ],
+          [
+            "`(a|b)` (-E)",
+            "a or b"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d10p05",
+      "title": "Find the bug: the alert script",
+      "type": "fix-bug",
+      "topic": "Text",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`alert.sh` feeds a Slack alert. It says `errors: 0` but there is an ERROR and a FATAL line. It shows requests from three \"IPs\" instead of one. And it counts only one timeout warning.",
+      "task": [
+        "Run `bash alert.sh`. Compare with `cat logs/node.log`.",
+        "Find 3 bugs: the `|` in a basic regex, the dots in the IP, and the case of `timeout`.",
+        "Fix them. The expected result: errors 2, one line for 10.0.0.5, timeouts 2."
+      ],
+      "hints": [
+        "In basic grep, `|` is a normal character. Use `-E`.",
+        "A `.` matches any character, and `10.0.0.5` is also inside `10.0.0.50`. Use `-F` (fixed text) and `-w` (whole word).",
+        "`Timeout` and `timeout`: add `-i`."
+      ],
+      "solution": [
+        "bash alert.sh",
+        "echo \"--- fixed ---\"",
+        "cat > alert.sh <<'EOF'",
+        "#!/bin/bash",
+        "# 1) count lines with ERROR or FATAL",
+        "# 2) show requests from the IP 10.0.0.5 only",
+        "# 3) count timeout warnings (any case)",
+        "echo \"errors: $(grep -cE 'ERROR|FATAL' logs/node.log)\"",
+        "grep -Fw '10.0.0.5' logs/node.log",
+        "echo \"timeouts: $(grep -ci 'timeout' logs/node.log)\"",
+        "EOF",
+        "bash alert.sh"
+      ],
+      "explanation": [
+        {
+          "part": "-E 'ERROR|FATAL'",
+          "meaning": "Bug 1: basic grep looked for the text `ERROR|FATAL` literally, so the count was 0."
+        },
+        {
+          "part": "-Fw '10.0.0.5'",
+          "meaning": "Bug 2: `-F` = fixed string (dots are dots), `-w` = whole word (not `10.0.0.50`)."
+        },
+        {
+          "part": "-ci",
+          "meaning": "Bug 3: count, ignore case: `Timeout` and `timeout`."
+        }
+      ],
+      "expected_output": "errors: 0\n2026-10-20 10:00:09 INFO request from 10.0.0.5\n2026-10-20 10:00:10 INFO request from 10.0.0.50\n2026-10-20 10:00:12 INFO request from 10a0b0c5\ntimeouts: 1\n--- fixed ---\nerrors: 2\n2026-10-20 10:00:09 INFO request from 10.0.0.5\ntimeouts: 2",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Escaping `\\|` in basic grep works in GNU grep but not everywhere. `-E` is clearer and portable.",
+        "Only adding `-F` for the IP: `10.0.0.50` still matches. `-w` is needed too."
+      ],
+      "interview_say": "Three regex traps: `|` needs `-E`, a dot matches any character, and grep is case-sensitive. For IPs I use `grep -Fw`.",
+      "try_yourself": "Without `-F`, write a regex that matches only `10.0.0.5` as a whole word: `grep -E '\\b10\\.0\\.0\\.5\\b'`."
+    },
+    {
+      "id": "d10p06",
+      "title": "grep -F for text with special characters",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A log uses `[ERROR]` in square brackets and shows prices with `$` and dots. In regex, `[ ]`, `$`, `.` and `*` have special meanings, so a normal grep finds the wrong lines. `-F` treats the pattern as plain text.",
+      "task": [
+        "Run `grep '[ERROR]' special.txt`. Why does it also match the second line, which has no `[ERROR]`?",
+        "Run `grep -F '[ERROR]' special.txt`.",
+        "Find `$5.00` exactly with `-F`.",
+        "Find the text `a.b*c` exactly."
+      ],
+      "hints": [
+        "`[ERROR]` in regex means \"one of the letters E, R, O\".",
+        "`-F` = fixed strings, no regex.",
+        "Use single quotes so bash does not touch `$5`."
+      ],
+      "solution": [
+        "grep '[ERROR]' special.txt",
+        "echo \"=== -F ===\"",
+        "grep -F '[ERROR]' special.txt",
+        "grep -F '$5.00' special.txt",
+        "grep -F 'a.b*c' special.txt"
+      ],
+      "explanation": [
+        {
+          "part": "[ERROR] as regex",
+          "meaning": "A character class: any one of the letters E, R, O. The second line has `ERROR` without brackets, so it matches too."
+        },
+        {
+          "part": "-F",
+          "meaning": "Plain text search. Fast, and no character is special."
+        },
+        {
+          "part": "'$5.00'",
+          "meaning": "Single quotes: bash does not replace `$5` (the 5th argument)."
+        }
+      ],
+      "expected_output": "[ERROR] price is $5.00\nERROR price is 5x00\n=== -F ===\n[ERROR] price is $5.00\n[ERROR] price is $5.00\npath a.b*c found",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Double quotes: `grep -F \"$5.00\"` becomes `grep -F \".00\"`, because `$5` is empty.",
+        "Escaping every character by hand: `\\[ERROR\\]` works, but `-F` is simpler and safer."
+      ],
+      "checks": [
+        {
+          "run": "set -- a b c d; grep -F \"$5.00\" special.txt",
+          "expect": "[ERROR] price is $5.00"
+        }
+      ],
+      "interview_say": "When I search for text with special characters like brackets, dots or dollars, I use `grep -F` with single quotes, so nothing is treated as regex.",
+      "try_yourself": "Put three IPs in a file `ips.txt`, one per line, and run `grep -Ff ips.txt logs/access.log`. `-f` reads many patterns from a file."
+    },
+    {
+      "id": "d10p07",
+      "title": "Groups and alternation: (GET|POST) /api/(todos|users)",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team lead wants to know how many write requests (POST, PUT, DELETE) the to-do API had, and how many requests went to `/api/todos` with or without an id.",
+      "task": [
+        "Count requests whose method is POST, PUT or DELETE with `grep -cE`.",
+        "Print only the method and path of every API request: `grep -oE '\"(GET|POST|PUT|DELETE) /api/[^ ]*'`.",
+        "Match `/api/todos` and `/api/todos/7` with one pattern using `(/[0-9]+)?`."
+      ],
+      "hints": [
+        "`(A|B|C)` = A or B or C (needs `-E`).",
+        "`[^ ]*` = any characters except a space.",
+        "`?` after a group = the group is optional."
+      ],
+      "solution": [
+        "grep -cE '\"(POST|PUT|DELETE) ' logs/access.log",
+        "grep -oE '\"(GET|POST|PUT|DELETE) /api/[^ ]*' logs/access.log | tr -d '\"'",
+        "grep -cE '/api/todos(/[0-9]+)? ' logs/access.log"
+      ],
+      "explanation": [
+        {
+          "part": "(POST|PUT|DELETE)",
+          "meaning": "Alternation inside a group: one of the three words."
+        },
+        {
+          "part": "[^ ]*",
+          "meaning": "Negated class: everything up to the next space (the path)."
+        },
+        {
+          "part": "(/[0-9]+)?",
+          "meaning": "An optional group: `/7`, `/42` or nothing."
+        },
+        {
+          "part": "tr -d '\"'",
+          "meaning": "Delete the quote characters from the output (Day 12)."
+        }
+      ],
+      "expected_output": "2\nGET /api/todos\nPOST /api/todos\nGET /api/todos\nDELETE /api/todos/7\nGET /api/todos\n5",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting the space after the method in the pattern: `\"(GET|POST)` also matches `\"GETTER` in other logs.",
+        "Writing the group without `-E`: basic grep needs `\\(` `\\)` and `\\|`."
+      ],
+      "interview_say": "With `grep -E` I use groups and `|` to match several words, and `?` to make a part optional, for example `/api/todos(/[0-9]+)?`.",
+      "try_yourself": "Count requests per method: `grep -oE '\"[A-Z]+ ' logs/access.log | sort | uniq -c`."
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you show 5 lines after each error in a log?",
+      "a": "`grep -A 5 ERROR app.log`. `-B` shows lines before, `-C` lines on both sides.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you list only the files that contain a word, in a whole folder?",
+      "a": "`grep -rl word folder/`. `-r` searches all files, `-l` prints only file names.",
+      "topic": "Text"
+    },
+    {
+      "q": "What does `grep -o` do?",
+      "a": "It prints only the matching part of each line, not the whole line. Good for extracting IPs or IDs.",
+      "topic": "Text"
+    },
+    {
+      "q": "What is the difference between `grep`, `grep -E` and `grep -F`?",
+      "a": "`grep` uses basic regex. `-E` uses extended regex (`+`, `?`, `|`, `{n}`, groups). `-F` searches plain text, no regex at all.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you remove comments and empty lines from a config file?",
+      "a": "`grep -Ev '^[[:space:]]*(#|$)' file`.",
+      "topic": "Text"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "grep -n",
+      "meaning": "Show line numbers",
+      "example": "grep -n ERROR app.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -A / -B / -C N",
+      "meaning": "N lines after / before / around",
+      "example": "grep -A 3 ERROR app.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -r",
+      "meaning": "Search a folder recursively",
+      "example": "grep -r db01 /etc/app",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -l / -L",
+      "meaning": "Files that match / do not match",
+      "example": "grep -rl db01 configs",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -w",
+      "meaning": "Whole words only",
+      "example": "grep -w db01 hosts",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -o",
+      "meaning": "Print only the matching part",
+      "example": "grep -oE 'time=[0-9]+ms' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -E",
+      "meaning": "Extended regex: + ? | {n} ( )",
+      "example": "grep -E 'ERROR|FATAL' app.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -F",
+      "meaning": "Fixed text, no regex",
+      "example": "grep -F '[ERROR]' app.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "grep -Ev '^[[:space:]]*(#|$)'",
+      "meaning": "Remove comments and empty lines",
+      "example": "grep -Ev '^[[:space:]]*(#|$)' sshd_config",
+      "topic": "Text"
+    },
+    {
+      "cmd": "^ $ . * [ ] [^ ]",
+      "meaning": "Start, end, any char, repeat, class, not-class",
+      "example": "grep '^Port' sshd_config",
+      "topic": "Text"
+    },
+    {
+      "cmd": "{n,m}",
+      "meaning": "Repeat n to m times (-E)",
+      "example": "grep -E '[0-9]{4,}ms' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "(a|b)",
+      "meaning": "Group and alternation (-E)",
+      "example": "grep -E '\"(POST|PUT) ' access.log",
+      "topic": "Text"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "-i -v -c -n",
+      "problems": [
+        "d10p01",
+        "d10p04",
+        "d10p05"
+      ]
+    },
+    {
+      "item": "-o",
+      "problems": [
+        "d10p03",
+        "d10p07"
+      ]
+    },
+    {
+      "item": "-r -l -w",
+      "problems": [
+        "d10p02",
+        "d10p05"
+      ]
+    },
+    {
+      "item": "-E -F",
+      "problems": [
+        "d10p03",
+        "d10p05",
+        "d10p06"
+      ]
+    },
+    {
+      "item": "-A -B -C",
+      "problems": [
+        "d10p01"
+      ]
+    },
+    {
+      "item": "Anchors",
+      "problems": [
+        "d10p02",
+        "d10p04"
+      ]
+    },
+    {
+      "item": "Character classes",
+      "problems": [
+        "d10p04",
+        "d10p06"
+      ]
+    },
+    {
+      "item": "Groups, extended regex",
+      "problems": [
+        "d10p03",
+        "d10p07"
+      ]
+    },
+    {
+      "item": "grep on logs",
+      "problems": [
+        "d10p01",
+        "d10p03",
+        "d10p05"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day10"
+}

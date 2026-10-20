@@ -1,0 +1,624 @@
+{
+  "day": 23,
+  "week": 4,
+  "title": "Project: Nginx log analyzer",
+  "goal": "Build a real log analyzer step by step: status codes, error rate, top IPs and URLs, a time window, and a clean report with an exit code for alerting.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day23 && cd ~/bash-practice/day23",
+    "# an Nginx access log in the default \"combined\" format (122 lines)",
+    "ips=(10.0.0.5 10.0.0.7 192.168.1.20 172.16.0.3 10.0.0.9 203.0.113.50)",
+    "paths=(/api/todos /api/todos /api/todos /login /login /api/todos/1 /static/app.js /health /api/todos/2 /api/users/7)",
+    "uas=(\"Mozilla/5.0 (Windows NT 10.0; Win64; x64)\" \"curl/8.5.0\" \"Mozilla/5.0 (X11; Linux x86_64)\" \"python-requests/2.31\")",
+    "for i in $(seq 1 120); do",
+    "  ip=${ips[$(( (i * 5 + i / 7) % 6 ))]}",
+    "  [ $(( i % 3 )) -eq 0 ] && ip=10.0.0.5",
+    "  p=${paths[$(( i % 10 ))]}",
+    "  case $(( i % 13 )) in 0) st=500 ;; 5) st=502 ;; 7) st=404 ;; 9) st=301 ;; *) st=200 ;; esac",
+    "  m=GET; [ \"$p\" = /login ] && m=POST",
+    "  ua=${uas[$(( i % 4 ))]}; [ \"$p\" = /health ] && ua=\"kube-probe/1.29\"",
+    "  printf '%s - - [20/Oct/2026:10:%02d:%02d +0530] \"%s %s HTTP/1.1\" %s %s \"-\" \"%s\"\\n' \"$ip\" $(( i / 8 )) $(( (i * 7) % 60 )) \"$m\" \"$p\" \"$st\" $(( (i * 37) % 900 + 100 )) \"$ua\"",
+    "done > access.log",
+    "# two broken requests, like the ones internet scanners send",
+    "printf '%s\\n' '203.0.113.99 - - [20/Oct/2026:10:07:01 +0530] \"-\" 400 0 \"-\" \"-\"' '203.0.113.99 - - [20/Oct/2026:10:07:02 +0530] \"\\x16\\x03\\x01\\x02\" 400 157 \"-\" \"-\"' >> access.log",
+    "# P3: the first version of the analyzer, with bugs",
+    "printf '%s\\n' '#!/bin/bash' '# Usage: analyze-v1.sh <access.log>' '# Prints the count of each status code (biggest first) and the 5xx error rate with 2 decimals.' 'LOG=$1' 'echo \"== status codes ==\"' \"awk '{print \\$9}' \\$LOG | sort | uniq -c | sort -r\" 'TOTAL=$(wc -l < $LOG)' \"ERRORS=\\$(awk '\\$9 >= 500' \\$LOG | wc -l)\" 'echo \"5xx rate: $((ERRORS * 100 / TOTAL))%\"' > analyze-v1.sh",
+    "# P7: yesterday's rotated and compressed log",
+    "head -n 30 access.log | sed 's#20/Oct/2026#19/Oct/2026#' | gzip -n > access.log.1.gz",
+    "cd ~/bash-practice/day23"
+  ],
+  "warmup": [
+    {
+      "q": "What does `set -o pipefail` change?",
+      "a": "A pipeline fails if any command in it fails, not only the last one. Important with `| tee`.",
+      "from_day": 22
+    },
+    {
+      "q": "Which awk option sets the field separator? Give an example for a CSV.",
+      "a": "`-F`, for example `awk -F, '{print $2}' file.csv`.",
+      "from_day": 11
+    },
+    {
+      "q": "Which pipeline counts values and puts the most common first?",
+      "a": "`sort | uniq -c | sort -rn`",
+      "from_day": 12
+    },
+    {
+      "q": "How do you read a `.gz` log without unpacking it?",
+      "a": "`zcat file.gz` (or `zgrep pattern file.gz`).",
+      "from_day": 20
+    }
+  ],
+  "problems": [
+    {
+      "id": "d23p01",
+      "title": "Status codes and the 5xx error rate",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The team lead asks: \"How many 2xx, 3xx, 4xx and 5xx did the to-do app return this morning, and what is the 5xx rate?\" The log is in Nginx combined format, and it has two broken lines from internet scanners. A robust parser splits the line at the double quotes.",
+      "task": [
+        "Look at one normal line and the two broken lines at the end (`tail -n 3 access.log`).",
+        "Split lines at `\"` with `awk -F'\"'`: the request is field 2, and field 3 starts with the status. Print the status counts, biggest first.",
+        "Compute the 5xx error rate with 2 decimals in awk.",
+        "Count by class (2xx, 3xx, 4xx, 5xx)."
+      ],
+      "hints": [
+        "Combined format: `IP - user [time] \"request\" status bytes \"referer\" \"user agent\"`.",
+        "With `-F'\"'`, `$3` is ` 200 512 ` (status and bytes). `split($3, a, \" \")` puts the status in `a[1]`.",
+        "Error rate: `if (a[1] >= 500) e++` and in END `printf \"%.2f\", e * 100 / NR`."
+      ],
+      "solution": [
+        "tail -n 3 access.log",
+        "echo \"=== status codes ===\"",
+        "awk -F'\"' '{ split($3, a, \" \"); print a[1] }' access.log | sort | uniq -c | sort -rn",
+        "echo \"=== 5xx error rate ===\"",
+        "awk -F'\"' '{ split($3, a, \" \"); if (a[1] >= 500) e++ }",
+        "           END { printf \"%d of %d requests (%.2f%%)\\n\", e, NR, e * 100 / NR }' access.log",
+        "echo \"=== by class ===\"",
+        "awk -F'\"' '{ split($3, a, \" \"); c[substr(a[1], 1, 1) \"xx\"]++ } END { for (k in c) print k, c[k] }' access.log | sort"
+      ],
+      "explanation": [
+        {
+          "part": "-F'\"'",
+          "meaning": "Split at double quotes: 1 = IP, user and time; 2 = request; 3 = status and bytes; 4 = referer; 6 = user agent."
+        },
+        {
+          "part": "split($3, a, \" \")",
+          "meaning": "Split field 3 at spaces into the array `a`; `a[1]` is the status."
+        },
+        {
+          "part": "why not $9",
+          "meaning": "With spaces as separator, the status is `$9` only when the request has 3 parts. For `\"-\"` the fields shift."
+        },
+        {
+          "part": "e * 100 / NR",
+          "meaning": "awk does decimal math, so `%.2f` shows 2 decimals."
+        },
+        {
+          "part": "substr(a[1], 1, 1) \"xx\"",
+          "meaning": "First digit + `xx` = status class (Day 14)."
+        }
+      ],
+      "expected_output": "10.0.0.5 - - [20/Oct/2026:10:15:00 +0530] \"GET /api/todos HTTP/1.1\" 200 940 \"-\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64)\"\n203.0.113.99 - - [20/Oct/2026:10:07:01 +0530] \"-\" 400 0 \"-\" \"-\"\n203.0.113.99 - - [20/Oct/2026:10:07:02 +0530] \"\\x16\\x03\\x01\\x02\" 400 157 \"-\" \"-\"\n=== status codes ===\n     84 200\n      9 502\n      9 500\n      9 404\n      9 301\n      2 400\n=== 5xx error rate ===\n18 of 122 requests (14.75%)\n=== by class ===\n2xx 84\n3xx 9\n4xx 11\n5xx 18",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Parsing with `awk '{print $9}'`: broken requests and user agents with spaces in other fields can shift the columns (P3).",
+        "Counting 404 as \"errors\" in the same number as 500. 4xx are usually client mistakes; 5xx are server problems. Report them separately."
+      ],
+      "interview_say": "To parse Nginx combined logs safely I split at the double quotes with `awk -F'\"'`. The status is the first word of field 3, which works even for broken requests. Then I count with `sort | uniq -c` and compute the 5xx rate in awk.",
+      "try_yourself": "Print the full request lines that had status 502: `awk -F'\"' '{split($3,a,\" \"); if (a[1] == 502) print $2}' access.log`."
+    },
+    {
+      "id": "d23p02",
+      "title": "Top IPs and top URLs",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Security asks which clients send the most requests, and the product team asks which pages are the most popular. The user also wants the top URLs that return 5xx, because those are the ones to fix first.",
+      "task": [
+        "Top 5 client IPs with counts.",
+        "Top 5 URLs (the path is the 2nd word of the request). Skip broken requests that have no path.",
+        "Top 3 URLs that returned 5xx.",
+        "Number of different client IPs."
+      ],
+      "hints": [
+        "The IP is the first word of the line: `awk '{print $1}'` is safe here.",
+        "`split($2, r, \" \")`: `r[1]` method, `r[2]` path, `r[3]` protocol. Skip lines where `r[2] == \"\"`.",
+        "Unique count: `awk '{print $1}' access.log | sort -u | wc -l`."
+      ],
+      "solution": [
+        "echo \"=== top 5 IPs ===\"",
+        "awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -n 5",
+        "echo \"=== top 5 URLs ===\"",
+        "awk -F'\"' '{ split($2, r, \" \"); if (r[2] != \"\") print r[2] }' access.log | sort | uniq -c | sort -rn | head -n 5",
+        "echo \"=== top URLs with 5xx ===\"",
+        "awk -F'\"' '{ split($2, r, \" \"); split($3, a, \" \"); if (a[1] >= 500) print r[2] }' access.log | sort | uniq -c | sort -rn | head -n 3",
+        "echo \"unique client IPs: $(awk '{print $1}' access.log | sort -u | wc -l)\""
+      ],
+      "explanation": [
+        {
+          "part": "awk '{print $1}'",
+          "meaning": "The IP never has spaces, so space-splitting is fine for field 1."
+        },
+        {
+          "part": "split($2, r, \" \")",
+          "meaning": "The request `GET /api/todos HTTP/1.1` → method, path, protocol."
+        },
+        {
+          "part": "if (r[2] != \"\")",
+          "meaning": "Skip broken requests like `\"-\"` that have no path."
+        },
+        {
+          "part": "two splits in one line",
+          "meaning": "Path from field 2 and status from field 3, then filter on the status."
+        },
+        {
+          "part": "sort -u | wc -l",
+          "meaning": "Count distinct values."
+        }
+      ],
+      "expected_output": "=== top 5 IPs ===\n     63 10.0.0.5\n     12 203.0.113.50\n     12 192.168.1.20\n     11 172.16.0.3\n     11 10.0.0.9\n=== top 5 URLs ===\n     36 /api/todos\n     24 /login\n     12 /static/app.js\n     12 /health\n     12 /api/users/7\n=== top URLs with 5xx ===\n      4 /login\n      4 /api/todos\n      2 /static/app.js\nunique client IPs: 7",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `head` before the second sort: the result is the first IPs alphabetically, not the busiest.",
+        "Counting `/api/todos/1` and `/api/todos/2` as different endpoints when the question is about endpoints. Normalise ids with sed first (Day 14)."
+      ],
+      "interview_say": "Top IPs: `awk '{print $1}' | sort | uniq -c | sort -rn | head`. For URLs I take the second word of the request field, and I filter by status to find the endpoints that fail most.",
+      "try_yourself": "Normalise ids before counting: add `| sed -E 's#/[0-9]+$#/:id#'` before `sort` in the URL pipeline."
+    },
+    {
+      "id": "d23p03",
+      "title": "Find the bug: analyzer v1",
+      "type": "fix-bug",
+      "topic": "Text",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The first version of the analyzer, `analyze-v1.sh`, shows a strange `\"-\"` status, the list is not in the right order, and the error rate is a whole number. It also breaks for a log path with spaces.",
+      "task": [
+        "Run `bash analyze-v1.sh access.log`. Compare with your results from P1.",
+        "Find 4 bugs: `$9` parsing, `sort -r`, the integer percent, and the missing quotes/usage check.",
+        "Write the fixed `analyze.sh` and run it.",
+        "Test the usage message: run it with no argument."
+      ],
+      "hints": [
+        "`\"-\"` appears because the broken lines shift the fields. Use the `-F'\"'` parser from P1.",
+        "`sort -r` is text order. Counts need `sort -rn`.",
+        "Bash `$(( ))` has no decimals. Do the math in awk. Add `LOG=${1:?usage: analyze.sh <access.log>}`."
+      ],
+      "solution": [
+        "bash analyze-v1.sh access.log",
+        "cat > analyze.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: analyze.sh <access.log>",
+        "# Prints the count of each status code (biggest first) and the 5xx error rate with 2 decimals.",
+        "set -euo pipefail",
+        "LOG=${1:?usage: analyze.sh <access.log>}",
+        "[ -r \"$LOG\" ] || { echo \"error: cannot read $LOG\" >&2; exit 2; }",
+        "status() { awk -F'\"' '{ split($3, a, \" \"); print a[1] }' \"$LOG\"; }",
+        "echo \"== status codes ==\"",
+        "status | sort | uniq -c | sort -rn",
+        "status | awk '{ if ($1 >= 500) e++ } END { printf \"5xx rate: %.2f%%\\n\", e * 100 / NR }'",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "bash analyze.sh access.log",
+        "bash analyze.sh; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "$9 → -F'\"' split",
+          "meaning": "Bug 1: the broken requests produced `\"-\"` as a status."
+        },
+        {
+          "part": "sort -rn",
+          "meaning": "Bug 2: counts must be sorted as numbers."
+        },
+        {
+          "part": "printf %.2f in awk",
+          "meaning": "Bug 3: `$(( ))` cut 8.20 down to 8."
+        },
+        {
+          "part": "${1:?...} and \"$LOG\"",
+          "meaning": "Bug 4: no usage check and no quotes: a missing argument made `wc` wait for keyboard input."
+        },
+        {
+          "part": "status() function",
+          "meaning": "Parse once in one place; both outputs use it."
+        }
+      ],
+      "expected_output": "== status codes ==\n     84 200\n      9 502\n      9 500\n      9 404\n      9 301\n      2 \"-\"\n5xx rate: 14%\n--- fixed ---\n== status codes ==\n     84 200\n      9 502\n      9 500\n      9 404\n      9 301\n      2 400\n5xx rate: 14.75%\nanalyze.sh: line 5: 1: usage: analyze.sh <access.log>\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Fixing the parser only in the count and not in the error rate. Put the parsing in one function.",
+        "Running the old script without an argument: awk waits for keyboard input (press Ctrl+C), and `wc -l < $LOG` gives `ambiguous redirect`. Always check arguments first."
+      ],
+      "checks": [
+        {
+          "run": "LOG=; wc -l < $LOG",
+          "expect": "ambiguous redirect"
+        }
+      ],
+      "interview_say": "I make log parsing robust (split at quotes, not at spaces), sort counts numerically, do decimals in awk, and check the arguments, so one bad log line or a missing argument cannot break the report.",
+      "try_yourself": "Run the fixed script on yesterday's gzipped log: `bash analyze.sh <(zcat access.log.1.gz)`. Does it work with process substitution?"
+    },
+    {
+      "id": "d23p04",
+      "title": "Only one time window: 10:05 to 10:09",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "An alert fired at 10:07. The on-call engineer wants only the requests between 10:05:00 and 10:09:59: how many, how many failed, and a small per-minute chart to see when the problem started.",
+      "task": [
+        "Get the time `HH:MM:SS` from field 4 with `substr($4, 14, 8)`.",
+        "Print only lines between `10:05:00` and `10:09:59` (text comparison works for this format). Count them.",
+        "Count the 5xx and 4xx in that window.",
+        "Print requests per minute for the whole log as a small bar chart with `#`."
+      ],
+      "hints": [
+        "Field 4 looks like `[20/Oct/2026:10:07:01`: characters 14-21 are the time.",
+        "`t >= \"10:05:00\" && t <= \"10:09:59\"`",
+        "Per minute: `substr($4, 14, 5)` = `10:07`. Build the bar in END with a loop."
+      ],
+      "solution": [
+        "awk '{ t = substr($4, 14, 8); if (t >= \"10:05:00\" && t <= \"10:09:59\") n++ } END { print \"requests 10:05-10:09:\", n }' access.log",
+        "awk -F'\"' '{ t = substr($1, index($1, \"[\") + 13, 8); split($3, a, \" \")",
+        "             if (t >= \"10:05:00\" && t <= \"10:09:59\") { if (a[1] >= 500) e5++; else if (a[1] >= 400) e4++ } }",
+        "           END { print \"5xx:\", e5 + 0, \" 4xx:\", e4 + 0 }' access.log",
+        "echo \"=== requests per minute ===\"",
+        "awk '{ m = substr($4, 14, 5); c[m]++ }",
+        "     END { for (k in c) { bar = \"\"; for (i = 0; i < c[k]; i++) bar = bar \"#\"; printf \"%s %2d %s\\n\", k, c[k], bar } }' access.log | sort"
+      ],
+      "explanation": [
+        {
+          "part": "substr($4, 14, 8)",
+          "meaning": "From `[20/Oct/2026:10:07:01`, start at character 14, take 8: `10:07:01`."
+        },
+        {
+          "part": "string comparison",
+          "meaning": "`HH:MM:SS` with leading zeros sorts like time, so `>=` and `<=` on text work."
+        },
+        {
+          "part": "index($1, \"[\") + 13",
+          "meaning": "Same time, but found inside field 1 when the line is split at quotes."
+        },
+        {
+          "part": "e5 + 0",
+          "meaning": "Print 0 instead of an empty value when nothing matched."
+        },
+        {
+          "part": "bar loop",
+          "meaning": "Repeat `#` c[k] times: a quick chart in the terminal."
+        }
+      ],
+      "expected_output": "requests 10:05-10:09: 42\n5xx: 6  4xx: 5\n=== requests per minute ===\n10:00  7 #######\n10:01  8 ########\n10:02  8 ########\n10:03  8 ########\n10:04  8 ########\n10:05  8 ########\n10:06  8 ########\n10:07 10 ##########\n10:08  8 ########\n10:09  8 ########\n10:10  8 ########\n10:11  8 ########\n10:12  8 ########\n10:13  8 ########\n10:14  8 ########\n10:15  1 #",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Comparing times across midnight or across days with text: `23:59` > `00:01`. For long ranges, convert to epoch seconds (Day 13).",
+        "Forgetting that the log time zone (`+0530`) can be different from the alert's time zone (often UTC)."
+      ],
+      "interview_say": "To focus on an incident I cut the log to the time window with awk, then count errors in that window and print requests per minute to see when it started.",
+      "try_yourself": "Show only the minute with the most 5xx errors."
+    },
+    {
+      "id": "d23p05",
+      "title": "Final: log-report.sh, a clean report with an alert exit code",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 15,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The final tool runs from cron every hour and posts its report to the team chat. Options: `-n N` (top N, default 5) and `-t PCT` (5xx alert threshold, default 5). It exits 1 when the 5xx rate is above the threshold, so the cron wrapper can page someone.",
+      "task": [
+        "Write `log-report.sh [-n N] [-t PCT] <access.log>` with `getopts`, `set -euo pipefail`, a usage function and input checks.",
+        "Sections: total requests, status classes, 5xx rate, top N IPs, top N URLs.",
+        "Use `printf` for aligned columns.",
+        "Exit 1 if the 5xx rate is above the threshold, else 0. Run it with defaults, then with `-n 3 -t 20`."
+      ],
+      "hints": [
+        "Compare decimals with awk: `awk -v r=\"$RATE\" -v t=\"$THRESH\" 'BEGIN { exit !(r > t) }'`.",
+        "Reuse the parser from P1 in a function `parse` that prints `ip status path` per line.",
+        "`shift $((OPTIND - 1))` after getopts leaves the log file in `$1`."
+      ],
+      "solution": [
+        "cat > log-report.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: log-report.sh [-n top] [-t threshold%] <access.log>",
+        "set -euo pipefail",
+        "usage() { echo \"usage: log-report.sh [-n top] [-t threshold%] <access.log>\" >&2; exit 2; }",
+        "TOP=5; THRESH=5",
+        "while getopts \"n:t:h\" opt; do",
+        "  case $opt in n) TOP=$OPTARG ;; t) THRESH=$OPTARG ;; *) usage ;; esac",
+        "done",
+        "shift $((OPTIND - 1))",
+        "LOG=${1:-}; [ -r \"$LOG\" ] || usage",
+        "[[ $TOP =~ ^[0-9]+$ ]] || usage",
+        "parse() { awk -F'\"' '{ split($1, f, \" \"); split($2, r, \" \"); split($3, a, \" \"); print f[1], a[1], (r[2] == \"\" ? \"-\" : r[2]) }' \"$LOG\"; }",
+        "TOTAL=$(parse | wc -l)",
+        "RATE=$(parse | awk '{ if ($2 >= 500) e++ } END { printf \"%.2f\", e * 100 / NR }')",
+        "echo \"Access log report: $(basename \"$LOG\")\"",
+        "printf '%-16s %s\\n' \"requests:\" \"$TOTAL\" \"5xx rate:\" \"$RATE% (alert above $THRESH%)\"",
+        "echo \"-- status classes --\"",
+        "parse | awk '{ c[substr($2, 1, 1) \"xx\"]++ } END { for (k in c) printf \"  %-5s %5d\\n\", k, c[k] }' | sort",
+        "echo \"-- top $TOP IPs --\"",
+        "parse | awk '{print $1}' | sort | uniq -c | sort -rn | head -n \"$TOP\" | awk '{ printf \"  %-15s %5d\\n\", $2, $1 }'",
+        "echo \"-- top $TOP URLs --\"",
+        "parse | awk '$3 != \"-\" {print $3}' | sort | uniq -c | sort -rn | head -n \"$TOP\" | awk '{ printf \"  %-15s %5d\\n\", $2, $1 }'",
+        "if awk -v r=\"$RATE\" -v t=\"$THRESH\" 'BEGIN { exit !(r > t) }'; then",
+        "  echo \"ALERT: 5xx rate $RATE% is above $THRESH%\" >&2",
+        "  exit 1",
+        "fi",
+        "EOF",
+        "bash log-report.sh access.log; echo \"exit code: $?\"",
+        "echo",
+        "bash log-report.sh -n 3 -t 20 access.log; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "getopts + shift $((OPTIND - 1))",
+          "meaning": "Read the options, then remove them so `$1` is the log file (Day 9)."
+        },
+        {
+          "part": "parse()",
+          "meaning": "One robust parser that prints `ip status path`. All sections use it."
+        },
+        {
+          "part": "printf '%-16s %s\\n' a b c d",
+          "meaning": "The format repeats for each pair: aligned labels."
+        },
+        {
+          "part": "awk 'BEGIN { exit !(r > t) }'",
+          "meaning": "Compare decimal numbers (bash cannot). Exit 0 = true."
+        },
+        {
+          "part": "ALERT to stderr + exit 1",
+          "meaning": "Cron or CI can react to the exit code; the report stays clean on stdout."
+        }
+      ],
+      "expected_output": "Access log report: access.log\nrequests:        122\n5xx rate:        14.75% (alert above 5%)\n-- status classes --\n  2xx      84\n  3xx       9\n  4xx      11\n  5xx      18\n-- top 5 IPs --\n  10.0.0.5           63\n  203.0.113.50       12\n  192.168.1.20       12\n  172.16.0.3         11\n  10.0.0.9           11\n-- top 5 URLs --\n  /api/todos         36\n  /login             24\n  /static/app.js     12\n  /health            12\n  /api/users/7       12\nALERT: 5xx rate 14.75% is above 5%\nexit code: 1\n\nAccess log report: access.log\nrequests:        122\n5xx rate:        14.75% (alert above 20%)\n-- status classes --\n  2xx      84\n  3xx       9\n  4xx      11\n  5xx      18\n-- top 3 IPs --\n  10.0.0.5           63\n  203.0.113.50       12\n  192.168.1.20       12\n-- top 3 URLs --\n  /api/todos         36\n  /login             24\n  /static/app.js     12\nexit code: 0",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Comparing `8.20 > 5` with `[ ]`: `integer expression expected`. Use awk or `bc` for decimals.",
+        "Parsing the log 5 times on a 10 GB file is slow. For big logs, do everything in one awk program, or parse once into a temp file."
+      ],
+      "interview_say": "My log report script takes options with getopts, validates input, parses the log with one robust function, prints aligned sections with printf, and returns exit code 1 when the error rate passes a threshold, so cron or CI can alert.",
+      "try_yourself": "Add `-f` to choose a different field set, or add a section \"top user agents\" using field 6 of the quote split."
+    },
+    {
+      "id": "d23p06",
+      "title": "User agents and bytes per endpoint",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The team wants to know which clients call the API (browsers, scripts, monitoring) and how much data each endpoint sends. User agents contain spaces, so space-based fields cannot work here.",
+      "task": [
+        "Print the top user agents (field 6 when splitting at `\"`).",
+        "Sum the response bytes per URL (bytes = second word of field 3) and print in KB, biggest first."
+      ],
+      "hints": [
+        "`awk -F'\"' '{print $6}'`",
+        "`split($3, a, \" \"); sum[r[2]] += a[2]`",
+        "`printf \"%7.1f KB %s\\n\", sum[p] / 1024, p`"
+      ],
+      "solution": [
+        "awk -F'\"' '{print $6}' access.log | sort | uniq -c | sort -rn",
+        "echo \"=== bytes per URL ===\"",
+        "awk -F'\"' '{ split($2, r, \" \"); split($3, a, \" \"); if (r[2] != \"\") sum[r[2]] += a[2] }",
+        "           END { for (p in sum) printf \"%7.1f KB  %s\\n\", sum[p] / 1024, p }' access.log | sort -rn"
+      ],
+      "explanation": [
+        {
+          "part": "$6 with -F'\"'",
+          "meaning": "The user agent: the text inside the last pair of quotes."
+        },
+        {
+          "part": "a[2]",
+          "meaning": "Bytes sent, the second word after the status."
+        },
+        {
+          "part": "sum[path] += bytes",
+          "meaning": "Group and sum by path (Day 11)."
+        }
+      ],
+      "expected_output": "     30 Mozilla/5.0 (X11; Linux x86_64)\n     30 Mozilla/5.0 (Windows NT 10.0; Win64; x64)\n     24 python-requests/2.31\n     24 curl/8.5.0\n     12 kube-probe/1.29\n      2 -\n=== bytes per URL ===\n   19.2 KB  /api/todos\n   12.6 KB  /login\n    7.0 KB  /health\n    6.5 KB  /static/app.js\n    6.5 KB  /api/todos/2\n    6.1 KB  /api/users/7\n    6.1 KB  /api/todos/1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Trusting user agents: any client can send any text. Use them for statistics, not for security decisions."
+      ],
+      "interview_say": "Because user agents contain spaces, I split combined logs at the quotes. Then the user agent is field 6 and I can group bytes or requests by any field with awk arrays.",
+      "try_yourself": "Count requests from `kube-probe` and from browsers (`Mozilla`) separately."
+    },
+    {
+      "id": "d23p07",
+      "title": "Include rotated and gzipped logs",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Nginx logs are rotated every night: `access.log` (today), `access.log.1.gz` (yesterday, compressed). For a two-day report the user must read both without unpacking files on the server.",
+      "task": [
+        "Count the lines in each file (`wc -l` and `zcat ... | wc -l`).",
+        "Read both files in one stream with `zcat -f access.log access.log.1.gz` (`-f` passes plain files through).",
+        "Count requests per day using the date in field 4."
+      ],
+      "hints": [
+        "`zcat -f` = like `cat` for normal files and `zcat` for `.gz` files.",
+        "The day is `substr($4, 2, 11)`: `20/Oct/2026`.",
+        "`zgrep` searches compressed files directly."
+      ],
+      "solution": [
+        "echo \"today: $(wc -l < access.log) lines, yesterday: $(zcat access.log.1.gz | wc -l) lines\"",
+        "zcat -f access.log access.log.1.gz | awk '{ print substr($4, 2, 11) }' | sort | uniq -c",
+        "echo \"5xx yesterday: $(zgrep -cE '\" 5[0-9]{2} ' access.log.1.gz)\""
+      ],
+      "explanation": [
+        {
+          "part": "zcat -f",
+          "meaning": "Read compressed and plain files as one stream."
+        },
+        {
+          "part": "substr($4, 2, 11)",
+          "meaning": "Skip the `[` and take the date part."
+        },
+        {
+          "part": "zgrep -c",
+          "meaning": "Count matching lines inside a `.gz` file."
+        }
+      ],
+      "expected_output": "today: 122 lines, yesterday: 30 lines\n     30 19/Oct/2026\n    122 20/Oct/2026\n5xx yesterday: 4",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Unpacking big rotated logs on a nearly full disk with `gunzip`: it needs space for the full file. Stream with `zcat` instead."
+      ],
+      "interview_say": "For reports over rotated logs I stream all files with `zcat -f access.log*` into the same pipeline, so I never unpack them on disk.",
+      "try_yourself": "Run your `analyze.sh` from P3 on both days: `bash analyze.sh <(zcat -f access.log access.log.1.gz)`."
+    }
+  ],
+  "interview": [
+    {
+      "q": "How would you find the 10 IPs with the most requests in an Nginx log?",
+      "a": "`awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -n 10`.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you compute the 5xx error rate from an access log?",
+      "a": "Count lines with status 500-599 and divide by all lines, in awk: `awk -F'\"' '{split($3,a,\" \"); if (a[1]>=500) e++} END {printf \"%.2f%%\\n\", e*100/NR}' access.log`.",
+      "topic": "Text"
+    },
+    {
+      "q": "Why can `awk '{print $9}'` give wrong status codes?",
+      "a": "Fields are split at spaces. A broken request like `\"-\"` changes the number of fields, so `$9` is not the status any more. Splitting at quotes is more robust.",
+      "topic": "Text"
+    },
+    {
+      "q": "How do you analyze yesterday's rotated `.gz` logs too?",
+      "a": "Stream them: `zcat -f access.log access.log.1.gz | ...`, or `zgrep` for searches. No unpacking needed.",
+      "topic": "Text"
+    },
+    {
+      "q": "How can a report script trigger an alert?",
+      "a": "It exits with a non-zero code when a threshold is passed (and prints the alert to stderr). Cron, CI or a monitoring agent reacts to the exit code.",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "awk -F'\"'",
+      "meaning": "Split combined logs at quotes",
+      "example": "awk -F'\"' '{print $2}' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "split($3, a, \" \")",
+      "meaning": "awk: split a field into an array",
+      "example": "awk -F'\"' '{split($3,a,\" \"); print a[1]}' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "substr($4, 14, 8)",
+      "meaning": "Time HH:MM:SS from the log time field",
+      "example": "awk '{print substr($4,14,8)}' access.log",
+      "topic": "Text"
+    },
+    {
+      "cmd": "awk 'BEGIN { exit !(a > b) }'",
+      "meaning": "Compare decimals in a script",
+      "example": "awk -v r=8.2 -v t=5 'BEGIN{exit !(r>t)}'",
+      "topic": "Text"
+    },
+    {
+      "cmd": "zcat -f / zgrep",
+      "meaning": "Read or search plain and gz logs",
+      "example": "zcat -f access.log* | wc -l",
+      "topic": "Text"
+    },
+    {
+      "cmd": "shift $((OPTIND - 1))",
+      "meaning": "Remove parsed options",
+      "example": "while getopts ...; done; shift $((OPTIND-1))",
+      "topic": "Scripting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "Parse a sample Nginx access log",
+      "problems": [
+        "d23p01",
+        "d23p03"
+      ]
+    },
+    {
+      "item": "Status code counts",
+      "problems": [
+        "d23p01",
+        "d23p03"
+      ]
+    },
+    {
+      "item": "Top IPs",
+      "problems": [
+        "d23p02",
+        "d23p05"
+      ]
+    },
+    {
+      "item": "Top URLs",
+      "problems": [
+        "d23p02",
+        "d23p05"
+      ]
+    },
+    {
+      "item": "5xx error rate",
+      "problems": [
+        "d23p01",
+        "d23p05"
+      ]
+    },
+    {
+      "item": "Clean text report",
+      "problems": [
+        "d23p05"
+      ]
+    },
+    {
+      "item": "Time window, user agents, rotated logs",
+      "problems": [
+        "d23p04",
+        "d23p06",
+        "d23p07"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day23"
+}

@@ -1,0 +1,691 @@
+{
+  "day": 24,
+  "week": 4,
+  "title": "Project: backup and rotation",
+  "goal": "Build a backup tool that makes timestamped archives with checksums, keeps only the last N, proves that restore works, and fails loudly.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day24 && cd ~/bash-practice/day24",
+    "# the data to back up: a database dump and uploaded files",
+    "mkdir -p data/uploads",
+    "printf '%s\\n' '-- todo database dump' 'INSERT INTO todos VALUES (1, '\"'\"'buy milk'\"'\"', false);' 'INSERT INTO todos VALUES (2, '\"'\"'deploy v2'\"'\"', true);' > data/todo-db.sql",
+    "head -c 4096 /dev/zero > data/uploads/avatar.png",
+    "# P2: nine old backups (11 to 19 October)",
+    "mkdir -p rotation/backups",
+    "for d in 11 12 13 14 15 16 17 18 19; do",
+    "  f=rotation/backups/todo-db-202610$d-0230.tar.gz",
+    "  tar -czf \"$f\" -C data .",
+    "  (cd rotation/backups && sha256sum \"${f##*/}\" > \"${f##*/}.sha256\")",
+    "done",
+    "# P3: the latest backup and its checksum",
+    "mkdir -p latest",
+    "tar -czf latest/todo-db-20261019-0230.tar.gz -C data .",
+    "(cd latest && sha256sum todo-db-20261019-0230.tar.gz > todo-db-20261019-0230.tar.gz.sha256)",
+    "# P4: backups restored from S3 (file times are in the WRONG order) and a broken rotate script",
+    "printf '%s\\n' '#!/bin/bash' '# (re)build rotation2/: 6 backups; the OLDEST name gets the NEWEST file time' 'rm -rf rotation2 && mkdir -p rotation2' 'for d in 11 12 13 14 15 16; do' '  f=rotation2/todo-db-202610$d-0230.tar.gz' '  tar -czf \"$f\" -C data .' '  (cd rotation2 && sha256sum \"${f##*/}\" > \"${f##*/}.sha256\")' '  touch -d \"2026-10-20 12:$((30 - d))\" \"$f\"' 'done' > make-rotation2.sh",
+    "bash make-rotation2.sh",
+    "printf '%s\\n' '#!/bin/bash' '# Keep the 3 NEWEST backups (newest = latest date in the file name).' '# Delete the older backups AND their .sha256 files. Safe to run again.' 'cd rotation2 || exit 1' 'KEEP=3' 'ls -t todo-db-*.tar.gz | tail -n +$KEEP | xargs rm -v' > rotate.sh",
+    "# P6: a mock aws CLI (prints what it would do, does not upload)",
+    "mkdir -p mockbin",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"[mock aws] aws $*\"' > mockbin/aws",
+    "chmod +x mockbin/aws",
+    "cd ~/bash-practice/day24"
+  ],
+  "warmup": [
+    {
+      "q": "How do you split an Nginx combined log line safely in awk?",
+      "a": "At the double quotes: `awk -F'\"'`. The request is field 2, status and bytes are in field 3.",
+      "from_day": 23
+    },
+    {
+      "q": "How do you check a file against a saved checksum?",
+      "a": "`sha256sum -c file.sha256`",
+      "from_day": 20
+    },
+    {
+      "q": "How do you stop two cron runs of a script from overlapping?",
+      "a": "`flock`: `exec 9>/tmp/job.lock; flock -n 9 || exit 1`.",
+      "from_day": 22
+    },
+    {
+      "q": "Why use `mktemp -d` for a restore test?",
+      "a": "It gives a new, private, empty folder every run, so old files cannot hide a broken backup.",
+      "from_day": 13
+    }
+  ],
+  "problems": [
+    {
+      "id": "d24p01",
+      "title": "A timestamped backup with a checksum",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Every night at 02:30 the to-do database dump and uploads must be packed into one archive with the date in the name, plus a checksum file to detect damage later. For this exercise the time is fixed, so everyone gets the same names.",
+      "task": [
+        "Set `STAMP=20261020-0230` (in real use: `STAMP=$(date +%Y%m%d-%H%M)`).",
+        "Pack the contents of `data` into `backups/todo-db-$STAMP.tar.gz` (use `-C data .`).",
+        "Write the checksum file next to it, from inside the `backups` folder.",
+        "Check the archive with `sha256sum -c` and list its contents."
+      ],
+      "hints": [
+        "`tar -czf ARCHIVE -C data .` stores the files without the `data/` prefix.",
+        "`(cd backups && sha256sum NAME > NAME.sha256)`: the checksum file then has only the file name, not a path.",
+        "Sortable names: `todo-db-YYYYmmdd-HHMM.tar.gz`."
+      ],
+      "solution": [
+        "STAMP=20261020-0230                     # real use: STAMP=$(date +%Y%m%d-%H%M)",
+        "NAME=todo-db-$STAMP.tar.gz",
+        "mkdir -p backups",
+        "tar -czf \"backups/$NAME\" -C data .",
+        "(cd backups && sha256sum \"$NAME\" > \"$NAME.sha256\")",
+        "ls backups",
+        "(cd backups && sha256sum -c \"$NAME.sha256\")",
+        "tar -tzf \"backups/$NAME\" | sort"
+      ],
+      "explanation": [
+        {
+          "part": "STAMP",
+          "meaning": "Date and time in the name, largest unit first, so names sort by time."
+        },
+        {
+          "part": "-C data .",
+          "meaning": "Go into `data` and pack `.`: paths inside start with `./`."
+        },
+        {
+          "part": "(cd backups && ...)",
+          "meaning": "Subshell: the checksum file stores only the file name, so `sha256sum -c` works wherever the folder is copied."
+        },
+        {
+          "part": "sha256sum -c",
+          "meaning": "Recompute and compare: `OK` means the archive is not damaged."
+        }
+      ],
+      "expected_output": "todo-db-20261020-0230.tar.gz  todo-db-20261020-0230.tar.gz.sha256\ntodo-db-20261020-0230.tar.gz: OK\n./\n./todo-db.sql\n./uploads/\n./uploads/avatar.png",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `$(date)` in a file name: `Tue Oct 20 02:30:00 +0530 2026` has spaces and colons.",
+        "Creating the checksum with a path (`sha256sum backups/x.tar.gz`): after the files are moved, `sha256sum -c` cannot find them."
+      ],
+      "interview_say": "My backups use sortable timestamped names like `app-20261020-0230.tar.gz` and a `.sha256` next to each archive, so I can verify them before a restore.",
+      "try_yourself": "Use `tar -czf - -C data . | tee backups/x.tar.gz | sha256sum` to pack and hash in one pass. Compare the hash with `sha256sum backups/x.tar.gz`."
+    },
+    {
+      "id": "d24p02",
+      "title": "Keep only the last N backups",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The backup disk is filling up: there are 9 nightly backups and the policy is to keep the last 3. Because the names contain sortable dates, the user sorts by name (not by file time) and deletes everything except the newest 3, with their checksum files.",
+      "task": [
+        "In `rotation/backups`, list the archives sorted by name.",
+        "Dry run: show which ones would be deleted with `head -n -3`.",
+        "Delete them and their `.sha256` files, printing each removed file.",
+        "List the folder again. Run the delete step once more: nothing must happen."
+      ],
+      "hints": [
+        "`ls -1 todo-db-*.tar.gz | sort` = oldest first, because the date is in the name.",
+        "`head -n -3` (GNU) prints all lines except the last 3.",
+        "Loop with `while IFS= read -r f; do rm -v -- \"$f\" \"$f.sha256\"; done`."
+      ],
+      "solution": [
+        "cd rotation/backups",
+        "KEEP=3",
+        "echo \"=== all backups (oldest first) ===\"",
+        "ls -1 todo-db-*.tar.gz | sort",
+        "echo \"=== would delete ===\"",
+        "ls -1 todo-db-*.tar.gz | sort | head -n -\"$KEEP\"",
+        "ls -1 todo-db-*.tar.gz | sort | head -n -\"$KEEP\" | while IFS= read -r f; do",
+        "  rm -v -- \"$f\" \"$f.sha256\"",
+        "done",
+        "echo \"=== left ===\"",
+        "ls -1",
+        "echo \"=== second run ===\"",
+        "ls -1 todo-db-*.tar.gz | sort | head -n -\"$KEEP\" | wc -l"
+      ],
+      "explanation": [
+        {
+          "part": "sort by name",
+          "meaning": "Dates in the name make the order reliable, even after files are copied (copies change the file times)."
+        },
+        {
+          "part": "head -n -3",
+          "meaning": "Everything except the last 3 lines = everything except the 3 newest."
+        },
+        {
+          "part": "rm -v -- \"$f\" \"$f.sha256\"",
+          "meaning": "Remove the archive and its checksum; `--` ends options, so names starting with `-` are safe."
+        },
+        {
+          "part": "second run: 0",
+          "meaning": "Idempotent: when only 3 are left, nothing more is deleted (Day 22)."
+        },
+        {
+          "part": "alternative",
+          "meaning": "`find backups -name '*.tar.gz' -mtime +7 -delete` keeps by age instead of by count."
+        }
+      ],
+      "expected_output": "=== all backups (oldest first) ===\ntodo-db-20261011-0230.tar.gz\ntodo-db-20261012-0230.tar.gz\ntodo-db-20261013-0230.tar.gz\ntodo-db-20261014-0230.tar.gz\ntodo-db-20261015-0230.tar.gz\ntodo-db-20261016-0230.tar.gz\ntodo-db-20261017-0230.tar.gz\ntodo-db-20261018-0230.tar.gz\ntodo-db-20261019-0230.tar.gz\n=== would delete ===\ntodo-db-20261011-0230.tar.gz\ntodo-db-20261012-0230.tar.gz\ntodo-db-20261013-0230.tar.gz\ntodo-db-20261014-0230.tar.gz\ntodo-db-20261015-0230.tar.gz\ntodo-db-20261016-0230.tar.gz\nremoved 'todo-db-20261011-0230.tar.gz'\nremoved 'todo-db-20261011-0230.tar.gz.sha256'\nremoved 'todo-db-20261012-0230.tar.gz'\nremoved 'todo-db-20261012-0230.tar.gz.sha256'\nremoved 'todo-db-20261013-0230.tar.gz'\nremoved 'todo-db-20261013-0230.tar.gz.sha256'\nremoved 'todo-db-20261014-0230.tar.gz'\nremoved 'todo-db-20261014-0230.tar.gz.sha256'\nremoved 'todo-db-20261015-0230.tar.gz'\nremoved 'todo-db-20261015-0230.tar.gz.sha256'\nremoved 'todo-db-20261016-0230.tar.gz'\nremoved 'todo-db-20261016-0230.tar.gz.sha256'\n=== left ===\ntodo-db-20261017-0230.tar.gz\ntodo-db-20261017-0230.tar.gz.sha256\ntodo-db-20261018-0230.tar.gz\ntodo-db-20261018-0230.tar.gz.sha256\ntodo-db-20261019-0230.tar.gz\ntodo-db-20261019-0230.tar.gz.sha256\n=== second run ===\n0",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`ls -t` (by file time) after a restore from S3 or a copy: all files may have new times, so the wrong files are deleted (P4).",
+        "`tail -n +3` to keep 3 files: it starts at line 3, so it keeps only 2. Off-by-one.",
+        "Forgetting the `.sha256` files: they pile up forever."
+      ],
+      "interview_say": "I keep the last N backups by sorting the timestamped names and deleting all but the newest N with `head -n -N`. I do a dry run first, delete the checksum files too, and make sure a second run deletes nothing.",
+      "try_yourself": "Change KEEP to 5 (run Reset and setup first). Which dates are deleted now?"
+    },
+    {
+      "id": "d24p03",
+      "title": "Prove that restore works",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A backup that cannot be restored is worthless. Every week the team restores the latest backup into a temp folder, verifies the checksum, and compares the files with the live data. The test must clean up after itself, and must fail if the archive is damaged.",
+      "task": [
+        "Write `restore-test.sh ARCHIVE DATA_DIR` with `set -euo pipefail`.",
+        "Check the checksum first, then extract into `$(mktemp -d)` with `trap` cleanup.",
+        "Compare with `diff -r` and print `restore test PASSED` or fail.",
+        "Run it on `latest/todo-db-20261019-0230.tar.gz`. Then damage a copy of the archive and run it again."
+      ],
+      "hints": [
+        "`(cd \"$(dirname \"$ARCHIVE\")\" && sha256sum -c --quiet \"$(basename \"$ARCHIVE\").sha256\")`",
+        "`trap 'rm -rf \"$WORK\"' EXIT` right after `WORK=$(mktemp -d)`.",
+        "Damage a copy: `cp` archive and checksum, then `printf 'x' >> copy.tar.gz`."
+      ],
+      "solution": [
+        "cat > restore-test.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: restore-test.sh ARCHIVE DATA_DIR",
+        "set -euo pipefail",
+        "ARCHIVE=${1:?archive}; DATA=${2:?data dir}",
+        "DIR=$(dirname \"$ARCHIVE\"); FILE=$(basename \"$ARCHIVE\")",
+        "if ! (cd \"$DIR\" && sha256sum -c --quiet \"$FILE.sha256\"); then",
+        "  echo \"restore test FAILED: checksum does not match\" >&2; exit 1",
+        "fi",
+        "WORK=$(mktemp -d)",
+        "trap 'rm -rf \"$WORK\"' EXIT",
+        "tar -xzf \"$ARCHIVE\" -C \"$WORK\"",
+        "diff -r \"$DATA\" \"$WORK\" && echo \"restore test PASSED: $FILE matches $DATA\"",
+        "EOF",
+        "bash restore-test.sh latest/todo-db-20261019-0230.tar.gz data; echo \"exit code: $?\"",
+        "mkdir -p broken",
+        "cp latest/todo-db-20261019-0230.tar.gz* broken/",
+        "printf 'x' >> broken/todo-db-20261019-0230.tar.gz        # damage the copy",
+        "bash restore-test.sh broken/todo-db-20261019-0230.tar.gz data; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "checksum first",
+          "meaning": "Do not even extract a damaged archive."
+        },
+        {
+          "part": "sha256sum -c --quiet",
+          "meaning": "Print only failures."
+        },
+        {
+          "part": "mktemp -d + trap EXIT",
+          "meaning": "A clean folder every time, always removed (Day 22)."
+        },
+        {
+          "part": "diff -r",
+          "meaning": "Compare every file and folder; exit 1 on any difference."
+        },
+        {
+          "part": "FAILED + exit 1",
+          "meaning": "The weekly job goes red, so someone looks at it."
+        }
+      ],
+      "expected_output": "restore test PASSED: todo-db-20261019-0230.tar.gz matches data\nexit code: 0\ntodo-db-20261019-0230.tar.gz: FAILED\nsha256sum: WARNING: 1 computed checksum did NOT match\nrestore test FAILED: checksum does not match\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Restoring into the live data folder to \"test\". A broken backup then also breaks production. Always restore into a temp folder.",
+        "Testing only that `tar -tzf` works. The files can be complete but old or wrong; compare with `diff -r` (or check row counts for databases)."
+      ],
+      "interview_say": "I test restores regularly: verify the checksum, extract into a temp folder from mktemp, compare with diff, and fail the job if anything is different.",
+      "try_yourself": "Change one line in `data/todo-db.sql` and run the restore test again. What does diff show?"
+    },
+    {
+      "id": "d24p04",
+      "title": "Find the bug: the rotation deleted the wrong backups",
+      "type": "fix-bug",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "After restoring the backup folder from S3, the team ran `rotate.sh`. It deleted the NEWEST backups and kept old ones, it left the checksum files behind, and the second run printed an error. Policy: keep the 3 newest by date in the name.",
+      "task": [
+        "Look at the file times: `ls -lt --time-style=+%H:%M rotation2/*.tar.gz`. Compare with the dates in the names.",
+        "Run `bash rotate.sh`, then `ls rotation2`. Which backups survived? Run it a second time.",
+        "Find 4 bugs: sorting by time, the off-by-one, the checksum files, and `xargs` with no input.",
+        "Rebuild the test backups with `bash make-rotation2.sh`. Fix the script, run it twice, and check the result."
+      ],
+      "hints": [
+        "`ls -t` sorts by file time, which changed during the restore. Sort the names instead.",
+        "To keep 3 with `tail`, the command must be `tail -n +4`. Easier: `head -n -3` on the oldest-first list.",
+        "`xargs -r` (no run if empty) or a `while read` loop."
+      ],
+      "solution": [
+        "ls -lt --time-style=+%H:%M rotation2/*.tar.gz | awk '{print $6, $7}'",
+        "bash rotate.sh",
+        "echo \"--- left after the broken run ---\"",
+        "ls rotation2 | grep -c sha256; ls rotation2/*.tar.gz",
+        "echo \"--- second broken run ---\"",
+        "bash rotate.sh",
+        "bash make-rotation2.sh                 # rebuild the 6 test backups",
+        "cat > rotate.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Keep the 3 NEWEST backups (newest = latest date in the file name).",
+        "# Delete the older backups AND their .sha256 files. Safe to run again.",
+        "set -euo pipefail",
+        "cd rotation2 || exit 1",
+        "KEEP=3",
+        "ls -1 todo-db-*.tar.gz | sort | head -n -\"$KEEP\" | while IFS= read -r f; do",
+        "  rm -v -- \"$f\" \"$f.sha256\"",
+        "done",
+        "EOF",
+        "echo \"--- fixed, first run ---\"",
+        "bash rotate.sh",
+        "echo \"--- fixed, second run ---\"",
+        "bash rotate.sh; echo \"exit code: $?\"",
+        "ls rotation2"
+      ],
+      "explanation": [
+        {
+          "part": "ls -t",
+          "meaning": "Bug 1: after the S3 restore, the oldest backup had the newest file time, so `ls -t` put it first."
+        },
+        {
+          "part": "tail -n +$KEEP",
+          "meaning": "Bug 2: `tail -n +3` starts at line 3, so only 2 were kept."
+        },
+        {
+          "part": ".sha256 left",
+          "meaning": "Bug 3: the checksum files of deleted backups stayed."
+        },
+        {
+          "part": "rm: missing operand",
+          "meaning": "Bug 4: with nothing to delete, `xargs rm` ran `rm` with no file. Use `xargs -r` or `while read`."
+        },
+        {
+          "part": "bash make-rotation2.sh",
+          "meaning": "Rebuild the 6 test backups between the broken and the fixed run (the setup made this helper)."
+        }
+      ],
+      "expected_output": "12:19 rotation2/todo-db-20261011-0230.tar.gz\n12:18 rotation2/todo-db-20261012-0230.tar.gz\n12:17 rotation2/todo-db-20261013-0230.tar.gz\n12:16 rotation2/todo-db-20261014-0230.tar.gz\n12:15 rotation2/todo-db-20261015-0230.tar.gz\n12:14 rotation2/todo-db-20261016-0230.tar.gz\nremoved 'todo-db-20261013-0230.tar.gz'\nremoved 'todo-db-20261014-0230.tar.gz'\nremoved 'todo-db-20261015-0230.tar.gz'\nremoved 'todo-db-20261016-0230.tar.gz'\n--- left after the broken run ---\n6\nrotation2/todo-db-20261011-0230.tar.gz\trotation2/todo-db-20261012-0230.tar.gz\n--- second broken run ---\nrm: missing operand\nTry 'rm --help' for more information.\n--- fixed, first run ---\nremoved 'todo-db-20261011-0230.tar.gz'\nremoved 'todo-db-20261011-0230.tar.gz.sha256'\nremoved 'todo-db-20261012-0230.tar.gz'\nremoved 'todo-db-20261012-0230.tar.gz.sha256'\nremoved 'todo-db-20261013-0230.tar.gz'\nremoved 'todo-db-20261013-0230.tar.gz.sha256'\n--- fixed, second run ---\nexit code: 0\ntodo-db-20261014-0230.tar.gz\t     todo-db-20261015-0230.tar.gz.sha256\ntodo-db-20261014-0230.tar.gz.sha256  todo-db-20261016-0230.tar.gz\ntodo-db-20261015-0230.tar.gz\t     todo-db-20261016-0230.tar.gz.sha256",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Testing rotation only on a fresh folder, where file times match the names. Test with copied or restored files too.",
+        "Running a new rotation script on the real backup folder first. Test on a copy, with a dry run."
+      ],
+      "checks": [
+        {
+          "run": "bash rotate.sh > /dev/null; bash rotate.sh",
+          "expect": "rm: missing operand"
+        }
+      ],
+      "interview_say": "For rotation I sort by the timestamp in the file name, not by file time, keep N with `head -n -N`, delete checksums too, and use `xargs -r` or a while loop so an empty list is not an error.",
+      "try_yourself": "Add a `--dry-run` option to the fixed script that prints `would delete FILE` instead of deleting."
+    },
+    {
+      "id": "d24p05",
+      "title": "Production-ready backup.sh",
+      "type": "script",
+      "topic": "Scripting",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Put it all together in one tool for cron: `backup.sh -s SRC -d DEST [-k KEEP]`. It must stop on any error with a clear message, never run twice at once, keep the last KEEP backups, and print the crontab line to install it.",
+      "task": [
+        "Options with getopts; `set -euo pipefail`; a `usage` function (exit 2).",
+        "Check that SRC is a folder; create DEST if needed; take a lock with `flock -n`.",
+        "Backup + checksum + rotation (from P1 and P2). Log each step with a time.",
+        "`trap` on ERR: print `BACKUP FAILED` with the line number.",
+        "Run 4 times with different `STAMP` values and `-k 2`, then once with a missing source."
+      ],
+      "hints": [
+        "`STAMP=${STAMP:-$(date +%Y%m%d-%H%M)}` lets tests set the time.",
+        "`trap 'echo \"BACKUP FAILED at line $LINENO\" >&2' ERR`",
+        "Crontab line: `30 2 * * * /path/backup.sh -s /srv/data -d /backups -k 7 >> /var/log/backup.log 2>&1`."
+      ],
+      "solution": [
+        "cat > backup.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: backup.sh -s SRC -d DEST [-k KEEP]",
+        "set -euo pipefail",
+        "trap 'echo \"BACKUP FAILED at line $LINENO\" >&2' ERR",
+        "usage() { echo \"usage: backup.sh -s SRC -d DEST [-k KEEP]\" >&2; exit 2; }",
+        "log() { echo \"[backup] $*\"; }",
+        "SRC=\"\"; DEST=\"\"; KEEP=7",
+        "while getopts \"s:d:k:\" opt; do",
+        "  case $opt in s) SRC=$OPTARG ;; d) DEST=$OPTARG ;; k) KEEP=$OPTARG ;; *) usage ;; esac",
+        "done",
+        "[ -n \"$SRC\" ] && [ -n \"$DEST\" ] || usage",
+        "[ -d \"$SRC\" ] || { echo \"error: source $SRC is not a folder\" >&2; exit 1; }",
+        "mkdir -p \"$DEST\"",
+        "exec 9> \"$DEST/.backup.lock\"",
+        "flock -n 9 || { echo \"error: another backup is running\" >&2; exit 1; }",
+        "STAMP=${STAMP:-$(date +%Y%m%d-%H%M)}",
+        "NAME=$(basename \"$SRC\")-$STAMP.tar.gz",
+        "tar -czf \"$DEST/$NAME\" -C \"$SRC\" .",
+        "(cd \"$DEST\" && sha256sum \"$NAME\" > \"$NAME.sha256\")",
+        "log \"created $NAME\"",
+        "ls -1 \"$DEST\"/*.tar.gz | sort | head -n -\"$KEEP\" | while IFS= read -r f; do",
+        "  rm -f -- \"$f\" \"$f.sha256\"; log \"removed old $(basename \"$f\")\"",
+        "done",
+        "log \"done, $(ls -1 \"$DEST\"/*.tar.gz | wc -l) backups kept\"",
+        "EOF",
+        "for s in 20261017-0230 20261018-0230 20261019-0230 20261020-0230; do",
+        "  STAMP=$s bash backup.sh -s data -d nightly -k 2",
+        "done",
+        "ls nightly",
+        "bash backup.sh -s nosuchdir -d nightly; echo \"exit code: $?\"",
+        "bash backup.sh -s data; echo \"exit code: $?\"",
+        "echo \"crontab: 30 2 * * * $HOME/bash-practice/day24/backup.sh -s /srv/todo/data -d /backups/todo -k 7 >> /var/log/todo-backup.log 2>&1\""
+      ],
+      "explanation": [
+        {
+          "part": "trap ... ERR",
+          "meaning": "Runs when a command fails under `set -e`; `$LINENO` shows where."
+        },
+        {
+          "part": "usage → exit 2",
+          "meaning": "Wrong options are a usage error, different from a backup failure (exit 1)."
+        },
+        {
+          "part": "exec 9> ...; flock -n 9",
+          "meaning": "Lock file inside DEST: two backups of the same target never overlap (Day 22)."
+        },
+        {
+          "part": "STAMP=${STAMP:-$(date ...)}",
+          "meaning": "Real time in production, fixed time in tests."
+        },
+        {
+          "part": "rotation with head -n -KEEP",
+          "meaning": "Same safe rotation as P2."
+        },
+        {
+          "part": ">> log 2>&1 in cron",
+          "meaning": "Keep stdout and errors in a log file (Day 16)."
+        }
+      ],
+      "expected_output": "[backup] created data-20261017-0230.tar.gz\n[backup] done, 1 backups kept\n[backup] created data-20261018-0230.tar.gz\n[backup] done, 2 backups kept\n[backup] created data-20261019-0230.tar.gz\n[backup] removed old data-20261017-0230.tar.gz\n[backup] done, 2 backups kept\n[backup] created data-20261020-0230.tar.gz\n[backup] removed old data-20261018-0230.tar.gz\n[backup] done, 2 backups kept\ndata-20261019-0230.tar.gz\t  data-20261020-0230.tar.gz\ndata-20261019-0230.tar.gz.sha256  data-20261020-0230.tar.gz.sha256\nerror: source nosuchdir is not a folder\nexit code: 1\nusage: backup.sh -s SRC -d DEST [-k KEEP]\nexit code: 2\ncrontab: 30 2 * * * /home/wicky/bash-practice/day24/backup.sh -s /srv/todo/data -d /backups/todo -k 7 >> /var/log/todo-backup.log 2>&1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Keeping backups only on the same disk as the data: a disk failure loses both. Copy them to another place (S3, another server) — see E1.",
+        "No alert on failure: a cron job that fails silently for a month is common. Send the exit code to monitoring."
+      ],
+      "interview_say": "A production backup script validates its options, stops on any error with a clear message, uses a lock against overlapping runs, makes timestamped archives with checksums, rotates old ones, and runs from cron with its output logged.",
+      "try_yourself": "Add `-n` for a dry run that only prints what would be created and removed."
+    },
+    {
+      "id": "d24p06",
+      "title": "Copy backups off the server (S3, with a mock aws)",
+      "type": "command",
+      "topic": "DevOps tools",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The backups must also go to an S3 bucket. The real `aws` CLI needs credentials and network, so here a mock `aws` prints the commands instead of running them. The user builds the upload loop and checks that only new files would be sent.",
+      "task": [
+        "Put the mock first in PATH: `export PATH=\"$PWD/mockbin:$PATH\"`. Check with `command -v aws`.",
+        "Upload every archive and checksum in `latest/` with `aws s3 cp ... --sse AES256`.",
+        "Show the `aws s3 sync` command that uploads only new files."
+      ],
+      "hints": [
+        "`--sse AES256` asks S3 to encrypt the file at rest.",
+        "Use a bucket prefix by year and month: `s3://todo-backups/2026/10/`.",
+        "`aws s3 sync latest/ s3://... --exclude '*' --include '*.tar.gz*'`."
+      ],
+      "solution": [
+        "export PATH=\"$PWD/mockbin:$PATH\"",
+        "echo \"aws used here: $(command -v aws | sed \"s|$HOME|~|\")\"",
+        "for f in latest/*.tar.gz latest/*.sha256; do",
+        "  aws s3 cp \"$f\" \"s3://todo-backups/2026/10/$(basename \"$f\")\" --sse AES256",
+        "done",
+        "aws s3 sync latest/ s3://todo-backups/2026/10/ --exclude '*' --include '*.tar.gz*'"
+      ],
+      "explanation": [
+        {
+          "part": "mock in PATH",
+          "meaning": "A fake `aws` script found before the real one. Good for testing scripts without cloud access."
+        },
+        {
+          "part": "aws s3 cp FILE s3://bucket/key",
+          "meaning": "Upload one file."
+        },
+        {
+          "part": "--sse AES256",
+          "meaning": "Server-side encryption."
+        },
+        {
+          "part": "aws s3 sync",
+          "meaning": "Upload only new or changed files."
+        },
+        {
+          "part": "lifecycle rule",
+          "meaning": "In S3 itself, a lifecycle rule can delete or archive old backups (for example after 30 days)."
+        }
+      ],
+      "expected_output": "aws used here: ~/bash-practice/day24/mockbin/aws\n[mock aws] aws s3 cp latest/todo-db-20261019-0230.tar.gz s3://todo-backups/2026/10/todo-db-20261019-0230.tar.gz --sse AES256\n[mock aws] aws s3 cp latest/todo-db-20261019-0230.tar.gz.sha256 s3://todo-backups/2026/10/todo-db-20261019-0230.tar.gz.sha256 --sse AES256\n[mock aws] aws s3 sync latest/ s3://todo-backups/2026/10/ --exclude * --include *.tar.gz*",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Putting AWS access keys in the script. Use an IAM role (EC2 instance profile) or `aws configure` with a profile, never hard-coded keys."
+      ],
+      "interview_say": "Backups must leave the server: I upload them to S3 with encryption, using an IAM role instead of keys, and let an S3 lifecycle rule handle long-term retention.",
+      "try_yourself": "Add `--storage-class STANDARD_IA` to the cp command. What does it change in S3 (cost vs access)?"
+    },
+    {
+      "id": "d24p07",
+      "title": "Rotation by age with find -mtime",
+      "type": "command",
+      "topic": "Scripting",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Another team's policy is by age, not by count: \"delete backups older than 7 days\". The user practises it safely on a copy with real file dates.",
+      "task": [
+        "Make a folder `aged` with 5 files dated 2, 5, 8, 12 and 30 days ago (`touch -d`).",
+        "List files older than 7 days with `find -mtime +7` (dry run).",
+        "Delete them with `-delete` and list what is left."
+      ],
+      "hints": [
+        "`touch -d '8 days ago' file` sets the date.",
+        "`-mtime +7` = more than 7 full days.",
+        "Always the same find command, first `-print`, then `-delete`."
+      ],
+      "solution": [
+        "mkdir -p aged",
+        "for n in 2 5 8 12 30; do",
+        "  touch -d \"$n days ago\" \"aged/backup-${n}d-old.tar.gz\"",
+        "done",
+        "echo \"=== older than 7 days ===\"",
+        "find aged -name '*.tar.gz' -mtime +7 -print | sort",
+        "find aged -name '*.tar.gz' -mtime +7 -delete",
+        "echo \"=== left ===\"",
+        "ls aged"
+      ],
+      "explanation": [
+        {
+          "part": "touch -d 'N days ago'",
+          "meaning": "Create test files with old dates."
+        },
+        {
+          "part": "-mtime +7",
+          "meaning": "Modified more than 7 days ago (Day 12)."
+        },
+        {
+          "part": "count vs age",
+          "meaning": "By age: simple, but if backups stop, all old ones still get deleted after 7 days. By count: always keeps N, even if they are old."
+        }
+      ],
+      "expected_output": "=== older than 7 days ===\naged/backup-12d-old.tar.gz\naged/backup-30d-old.tar.gz\naged/backup-8d-old.tar.gz\n=== left ===\nbackup-2d-old.tar.gz  backup-5d-old.tar.gz",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Rotation by age when backups have been failing silently for 8 days: the job deletes the last good backups. Keep a minimum count too."
+      ],
+      "interview_say": "Rotation by age uses `find -mtime +N -delete`. Rotation by count is safer when backups might stop, because it always keeps the last N. Many teams combine both.",
+      "try_yourself": "Combine both rules: delete files older than 7 days, but never leave fewer than 3 files."
+    }
+  ],
+  "interview": [
+    {
+      "q": "What should a good backup script do?",
+      "a": "Timestamped archive, checksum, rotation (keep last N), off-server copy (for example S3), a lock against overlapping runs, stop on errors with an alert, and regular restore tests.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you keep only the 7 newest backups?",
+      "a": "Sort the timestamped names and delete all but the last 7: `ls -1 backup-*.tgz | sort | head -n -7 | xargs -r rm --`. Or use `find -mtime` for age-based rotation.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "How do you know a backup can be restored?",
+      "a": "Test it: verify the checksum, extract into a temp folder, and compare with the source (`diff -r`), or restore a database dump into a test database. Do it regularly.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Why is `ls -t` risky for rotation?",
+      "a": "It sorts by file modification time, which changes when files are copied or restored. Dates in the file names are more reliable.",
+      "topic": "Scripting"
+    },
+    {
+      "q": "Where should backups be stored?",
+      "a": "Not only on the same server or disk. Also in another place, like S3 with encryption and a lifecycle rule (the 3-2-1 idea: 3 copies, 2 media, 1 off-site).",
+      "topic": "Scripting"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "tar -czf NAME-$(date +%Y%m%d-%H%M).tar.gz -C dir .",
+      "meaning": "Timestamped backup",
+      "example": "tar -czf db-20261020-0230.tar.gz -C data .",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "(cd dir && sha256sum f > f.sha256)",
+      "meaning": "Checksum with a relative name",
+      "example": "(cd backups && sha256sum x.tgz > x.tgz.sha256)",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "ls -1 *.tgz | sort | head -n -N",
+      "meaning": "All but the newest N (by name)",
+      "example": "ls -1 db-*.tgz | sort | head -n -7",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "xargs -r",
+      "meaning": "Do not run if there is no input",
+      "example": "... | xargs -r rm -v --",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "diff -r a b",
+      "meaning": "Compare two folder trees",
+      "example": "diff -r data /tmp/restore",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "trap '...' ERR",
+      "meaning": "React to a failed command",
+      "example": "trap 'echo FAILED at $LINENO >&2' ERR",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "VAR=${VAR:-$(date ...)}",
+      "meaning": "Allow tests to set the time",
+      "example": "STAMP=${STAMP:-$(date +%Y%m%d-%H%M)}",
+      "topic": "Scripting"
+    },
+    {
+      "cmd": "aws s3 cp / sync",
+      "meaning": "Copy backups to S3",
+      "example": "aws s3 cp x.tgz s3://bucket/2026/10/ --sse AES256",
+      "topic": "DevOps tools"
+    },
+    {
+      "cmd": "find -mtime +N -delete",
+      "meaning": "Rotation by age",
+      "example": "find /backups -name '*.tgz' -mtime +7 -delete",
+      "topic": "Scripting"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "tar backup with timestamp",
+      "problems": [
+        "d24p01",
+        "d24p05"
+      ]
+    },
+    {
+      "item": "Checksum",
+      "problems": [
+        "d24p01",
+        "d24p03"
+      ]
+    },
+    {
+      "item": "Keep last N",
+      "problems": [
+        "d24p02",
+        "d24p04",
+        "d24p05"
+      ]
+    },
+    {
+      "item": "Restore test",
+      "problems": [
+        "d24p03"
+      ]
+    },
+    {
+      "item": "Cron entry",
+      "problems": [
+        "d24p05"
+      ]
+    },
+    {
+      "item": "Safe failure handling",
+      "problems": [
+        "d24p03",
+        "d24p05"
+      ]
+    },
+    {
+      "item": "Off-site copy, rotation by age",
+      "problems": [
+        "d24p06",
+        "d24p07"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day24"
+}

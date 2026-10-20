@@ -1,0 +1,785 @@
+{
+  "day": 20,
+  "week": 3,
+  "title": "Packages and archives",
+  "goal": "Pack and unpack releases with tar, gzip and zip, verify downloads with checksums, and find out where a command or package comes from.",
+  "minutes": 90,
+  "needs": [
+    "zip",
+    "unzip"
+  ],
+  "setup": [
+    "mkdir -p ~/bash-practice/day20 && cd ~/bash-practice/day20",
+    "# an app folder to pack",
+    "mkdir -p app/config app/lib",
+    "echo 'java -jar lib/todo-api.jar' > app/start.sh",
+    "echo 'port: 8080' > app/config/application.yml",
+    "echo 'DB_PASSWORD=change-me' > app/.env",
+    "head -c 2048 /dev/zero > app/lib/todo-api.jar",
+    "# P2/P6: files offered by a local \"download server\"",
+    "mkdir -p dist",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"todo-cli 1.3.0\"' > dist/todo-cli.sh",
+    "(cd dist && sha256sum todo-cli.sh > todo-cli.sh.sha256)",
+    "# P4: a text report to compress",
+    "for i in $(seq 1 200); do echo \"2026-10-20 report line $i: all services OK\"; done > report.txt",
+    "# P5: a broken backup script",
+    "printf '%s\\n' '#!/bin/bash' '# Make a compressed backup of app/, save the checksum of the backup file,' '# then test a restore into restore-test/ and compare it with app/.' 'tar -cfz backup.tar.gz app' 'sha256sum app > backup.sha256' 'tar -xzf backup.tar.gz -C restore-test' 'echo \"backup OK\"' > backup.sh",
+    "cd ~/bash-practice/day20"
+  ],
+  "warmup": [
+    {
+      "q": "Which rsync command shows what would be copied, without copying?",
+      "a": "`rsync -avz --dry-run src/ dest/`",
+      "from_day": 19
+    },
+    {
+      "q": "What permissions do `~/.ssh` and a private key need?",
+      "a": "`~/.ssh` 700, private key 600.",
+      "from_day": 19
+    },
+    {
+      "q": "How do you see the 3 biggest folders in `/var`?",
+      "a": "`sudo du -xh --max-depth=1 /var | sort -h | tail -n 3`",
+      "from_day": 17
+    },
+    {
+      "q": "Which curl options make a health check fail on HTTP errors and not hang?",
+      "a": "`curl -fsS --max-time 5 URL`",
+      "from_day": 18
+    }
+  ],
+  "problems": [
+    {
+      "id": "d20p01",
+      "title": "tar: create, list and extract a release",
+      "type": "command",
+      "topic": "Packages",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The Jenkins pipeline must pack the to-do API into `todo-api-2.4.1.tar.gz`, check what is inside, and the server must unpack it into a release folder. The secret `.env` must not be in the archive.",
+      "task": [
+        "Create `todo-api-2.4.1.tar.gz` from the folder `app` (`-czf`).",
+        "List the contents without extracting (`-tzf`). Sort the list.",
+        "Create it again without `.env` (use `--exclude`). List again.",
+        "Extract it into a new folder `releases/2.4.1` (`-xzf ... -C`). Show the result with `find`."
+      ],
+      "hints": [
+        "c = create, x = extract, t = list, z = gzip, f = file name (must come last, right before the name).",
+        "`--exclude='.env'` goes before the folder name.",
+        "`-C DIR` = change to DIR first. The folder must exist: `mkdir -p` it."
+      ],
+      "solution": [
+        "tar -czf todo-api-2.4.1.tar.gz app",
+        "tar -tzf todo-api-2.4.1.tar.gz | sort",
+        "echo \"=== without .env ===\"",
+        "tar -czf todo-api-2.4.1.tar.gz --exclude='.env' app",
+        "tar -tzf todo-api-2.4.1.tar.gz | sort",
+        "mkdir -p releases/2.4.1",
+        "tar -xzf todo-api-2.4.1.tar.gz -C releases/2.4.1",
+        "echo \"=== extracted ===\"",
+        "find releases | sort"
+      ],
+      "explanation": [
+        {
+          "part": "tar -czf NAME.tar.gz DIR",
+          "meaning": "Create a gzip-compressed archive of DIR."
+        },
+        {
+          "part": "tar -tzf",
+          "meaning": "List the files inside. Check before extracting on a server."
+        },
+        {
+          "part": "--exclude='.env'",
+          "meaning": "Leave matching files out."
+        },
+        {
+          "part": "tar -xzf ... -C DIR",
+          "meaning": "Extract into DIR (it must exist)."
+        },
+        {
+          "part": "-j / -J",
+          "meaning": "bzip2 / xz compression instead of gzip (`.tar.bz2`, `.tar.xz`). Modern tar also detects it when extracting."
+        }
+      ],
+      "expected_output": "app/\napp/.env\napp/config/\napp/config/application.yml\napp/lib/\napp/lib/todo-api.jar\napp/start.sh\n=== without .env ===\napp/\napp/config/\napp/config/application.yml\napp/lib/\napp/lib/todo-api.jar\napp/start.sh\n=== extracted ===\nreleases\nreleases/2.4.1\nreleases/2.4.1/app\nreleases/2.4.1/app/config\nreleases/2.4.1/app/config/application.yml\nreleases/2.4.1/app/lib\nreleases/2.4.1/app/lib/todo-api.jar\nreleases/2.4.1/app/start.sh",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`tar -cfz backup.tar.gz app`: `f` takes the next word as the file name, so the archive is called `z` (P5).",
+        "Extracting a tar from the internet into `/` or the home folder without listing it first: it can overwrite files.",
+        "`tar -xzf file.tar.gz -C dir` when `dir` is missing: `tar: dir: Cannot open: No such file or directory`."
+      ],
+      "checks": [
+        {
+          "run": "tar -xzf todo.tgz -C missing-dir 2>&1; tar -czf t.tgz app; tar -xzf t.tgz -C missing-dir",
+          "expect": "tar: missing-dir: Cannot open: No such file or directory"
+        }
+      ],
+      "interview_say": "I create archives with `tar -czf name.tar.gz dir`, check them with `tar -tzf`, and extract with `tar -xzf name.tar.gz -C target`. `f` always comes last, directly before the file name.",
+      "try_yourself": "Run `tar -czvf test.tgz app` (with `v`). Then `tar -tvzf test.tgz`. What extra information does `v` show?",
+      "table": {
+        "head": [
+          "Letter",
+          "Meaning"
+        ],
+        "rows": [
+          [
+            "c",
+            "create"
+          ],
+          [
+            "x",
+            "extract"
+          ],
+          [
+            "t",
+            "list (table of contents)"
+          ],
+          [
+            "z",
+            "gzip"
+          ],
+          [
+            "v",
+            "verbose (print each file)"
+          ],
+          [
+            "f",
+            "archive file name follows: keep it last"
+          ],
+          [
+            "-C dir",
+            "work in dir"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d20p02",
+      "title": "Download and verify with sha256sum",
+      "type": "command",
+      "topic": "Packages",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A Dockerfile downloads the `todo-cli` tool. If the file is changed on the way (broken mirror, attacker), the build must fail. The vendor publishes a SHA-256 checksum. Here a local test server plays the vendor's website.",
+      "task": [
+        "Start a download server: `python3 -m http.server 8091 --bind 127.0.0.1 --directory dist &`.",
+        "Download `todo-cli.sh` with `curl -fsSL -o`, and again with `wget -q -O`.",
+        "Download `todo-cli.sh.sha256` and check the file with `sha256sum -c`.",
+        "Change one byte of the downloaded file and check again. Print the exit code."
+      ],
+      "hints": [
+        "`curl -fsSL -o FILE URL`: fail on errors, silent, follow redirects, save to FILE.",
+        "A `.sha256` file has lines `HASH  FILENAME`. `sha256sum -c` checks every line.",
+        "`sha256sum -c` exits 1 when a file does not match. Use that to stop a build."
+      ],
+      "solution": [
+        "python3 -m http.server 8091 --bind 127.0.0.1 --directory dist > /dev/null 2>&1 &",
+        "SRV=$!",
+        "sleep 1",
+        "curl -fsSL -o todo-cli.sh http://127.0.0.1:8091/todo-cli.sh",
+        "wget -q -O todo-cli-wget.sh http://127.0.0.1:8091/todo-cli.sh",
+        "cmp todo-cli.sh todo-cli-wget.sh && echo \"curl and wget got the same file\"",
+        "curl -fsSL -o todo-cli.sh.sha256 http://127.0.0.1:8091/todo-cli.sh.sha256",
+        "sha256sum -c todo-cli.sh.sha256",
+        "echo \"# changed\" >> todo-cli.sh            # simulate a broken or changed download",
+        "sha256sum -c todo-cli.sh.sha256; echo \"exit code: $?\"",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "curl -fsSL -o",
+          "meaning": "Download to a file, fail on HTTP errors, follow redirects (`-L`)."
+        },
+        {
+          "part": "wget -q -O",
+          "meaning": "The same with wget: quiet, output file."
+        },
+        {
+          "part": "cmp a b",
+          "meaning": "Compare two files byte by byte; no output if they are equal."
+        },
+        {
+          "part": "sha256sum -c",
+          "meaning": "Recompute the hash and compare with the expected one: `OK` or `FAILED`."
+        },
+        {
+          "part": "exit code 1",
+          "meaning": "A mismatch. In a Dockerfile `RUN` or a CI step, this stops the build."
+        }
+      ],
+      "expected_output": "curl and wget got the same file\ntodo-cli.sh: OK\ntodo-cli.sh: FAILED\nsha256sum: WARNING: 1 computed checksum did NOT match\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Downloading the checksum from the same untrusted place as the file. Get it from the vendor's official page or a signed release.",
+        "`curl URL | bash` installs without any check. Download, verify, then run."
+      ],
+      "interview_say": "I download with `curl -fsSL -o file URL`, then verify with `sha256sum -c` against the published checksum, so a changed or broken file stops the build.",
+      "try_yourself": "Compute a checksum yourself: `sha256sum app/start.sh`. Change the file and compute it again."
+    },
+    {
+      "id": "d20p03",
+      "title": "apt and dpkg: what is installed, and from which package?",
+      "type": "command",
+      "topic": "Packages",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A script on the server uses `tree` and `ls`. The user must know which package each command comes from (to add them to a Dockerfile), and check if a package is installed. Installing needs sudo; these checks do not.",
+      "task": [
+        "Find the package that owns `/usr/bin/ls` with `dpkg -S`.",
+        "Check if `coreutils` is installed with `dpkg -l` (first two columns).",
+        "List the files of the `tree` package that are in a `bin` folder (`dpkg -L`).",
+        "Show the installed and candidate version of `tree` with `apt-cache policy`.",
+        "Read the table: apt vs dnf/yum for the same tasks."
+      ],
+      "hints": [
+        "`dpkg -S /path` = which package owns this file. `dpkg -L pkg` = files of a package.",
+        "In `dpkg -l`, `ii` = installed OK.",
+        "`apt-cache policy pkg` shows `Installed:` and `Candidate:`."
+      ],
+      "solution": [
+        "dpkg -S /usr/bin/ls",
+        "dpkg -l coreutils | tail -n 1 | awk '{print $1, $2}'",
+        "dpkg -L tree | grep /bin/",
+        "apt-cache policy tree | head -n 3"
+      ],
+      "explanation": [
+        {
+          "part": "dpkg -S FILE",
+          "meaning": "Search: which installed package owns this file."
+        },
+        {
+          "part": "dpkg -l PKG",
+          "meaning": "Package status. `ii` = desired install, is installed."
+        },
+        {
+          "part": "dpkg -L PKG",
+          "meaning": "All files that the package installed."
+        },
+        {
+          "part": "apt-cache policy",
+          "meaning": "Installed version, candidate (newest available) version, and the repository."
+        },
+        {
+          "part": "sudo apt update",
+          "meaning": "Refresh the package lists. Run it before `apt install`."
+        }
+      ],
+      "expected_output": "coreutils: /usr/bin/ls\nii coreutils\n/usr/bin/tree\ntree:\n  Installed: 2.1.1-2ubuntu3.24.04.2\n  Candidate: 2.1.1-2ubuntu3.24.04.2",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "Version numbers depend on the Ubuntu version and the last `apt update`.",
+      "verified": true,
+      "mistakes": [
+        "`apt install` without `sudo`: `E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)`.",
+        "`apt install` fails with `Unable to locate package`: run `sudo apt update` first, or check the package name with `apt search`.",
+        "In Dockerfiles, `apt-get install` without `apt-get update` in the same RUN line uses old cached lists."
+      ],
+      "checks": [
+        {
+          "run": "apt install tree 2>&1 | grep -m1 lock",
+          "expect": "Could not open lock file"
+        }
+      ],
+      "interview_say": "On Ubuntu I use `apt` to install and `dpkg -S` or `dpkg -L` to see which package owns a file. On RHEL or Amazon Linux the same tasks use `dnf` or `yum` and `rpm -qf`.",
+      "try_yourself": "Run `apt show tree 2>/dev/null | head -n 8`. What is the package description?",
+      "table": {
+        "head": [
+          "Task",
+          "Debian/Ubuntu (apt)",
+          "RHEL/Amazon Linux (dnf/yum)"
+        ],
+        "rows": [
+          [
+            "refresh lists",
+            "`sudo apt update`",
+            "`sudo dnf makecache`"
+          ],
+          [
+            "install",
+            "`sudo apt install -y nginx`",
+            "`sudo dnf install -y nginx`"
+          ],
+          [
+            "remove",
+            "`sudo apt remove nginx` (`purge` = also configs)",
+            "`sudo dnf remove nginx`"
+          ],
+          [
+            "upgrade all",
+            "`sudo apt upgrade`",
+            "`sudo dnf upgrade`"
+          ],
+          [
+            "search",
+            "`apt search nginx`",
+            "`dnf search nginx`"
+          ],
+          [
+            "owner of a file",
+            "`dpkg -S /usr/bin/ls`",
+            "`rpm -qf /usr/bin/ls`"
+          ],
+          [
+            "files of a package",
+            "`dpkg -L pkg`",
+            "`rpm -ql pkg`"
+          ],
+          [
+            "package format",
+            "`.deb`",
+            "`.rpm`"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d20p04",
+      "title": "gzip, zip, and which/type/command -v",
+      "type": "command",
+      "topic": "Packages",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user sends a big report to a colleague who uses Windows (zip), compresses an old log on the server (gzip), and checks which program will really run when typing `python3` or `cd`.",
+      "task": [
+        "Compress `report.txt` with `gzip -k` (keep the original). Compare sizes with `stat -c '%s %n'`.",
+        "Read the first line of the `.gz` file without unpacking (`zcat`).",
+        "Create `bundle.zip` from `app` with `zip -qr`. List the names with `unzip -Z1`.",
+        "Show what `cd`, `ls` and `python3` are with `type`. Show the path of `python3` with `command -v`."
+      ],
+      "hints": [
+        "`gzip file` replaces the file with `file.gz`; `-k` keeps the original.",
+        "`unzip -l` lists with dates; `unzip -Z1` lists only names.",
+        "`type` knows builtins and aliases; `which` only knows files in PATH."
+      ],
+      "solution": [
+        "gzip -k report.txt",
+        "stat -c '%s %n' report.txt report.txt.gz",
+        "zcat report.txt.gz | head -n 1",
+        "zip -qr bundle.zip app",
+        "unzip -Z1 bundle.zip | sort",
+        "type cd",
+        "type ls",
+        "type python3",
+        "command -v python3"
+      ],
+      "explanation": [
+        {
+          "part": "gzip -k",
+          "meaning": "Compress one file into `.gz`, keep the original. `gunzip` or `gzip -d` unpacks."
+        },
+        {
+          "part": "zcat / zgrep",
+          "meaning": "Read or search a `.gz` file without unpacking it."
+        },
+        {
+          "part": "zip -qr / unzip",
+          "meaning": "zip format (common on Windows): `-r` folders, `-q` quiet."
+        },
+        {
+          "part": "type",
+          "meaning": "Is the name a shell builtin, an alias, a function, or a file? (`cd` is a builtin.)"
+        },
+        {
+          "part": "command -v",
+          "meaning": "Path of the program (or the name of a builtin). Best choice in scripts."
+        },
+        {
+          "part": "which",
+          "meaning": "Older tool: searches only PATH files. `which -a` shows all matches."
+        }
+      ],
+      "expected_output": "8692 report.txt\n590 report.txt.gz\n2026-10-20 report line 1: all services OK\napp/\napp/.env\napp/config/\napp/config/application.yml\napp/lib/\napp/lib/todo-api.jar\napp/start.sh\ncd is a shell builtin\nls is /usr/bin/ls\npython3 is /usr/bin/python3\n/usr/bin/python3",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "On WSL, `python3` is usually `/usr/bin/python3` too.",
+      "verified": true,
+      "mistakes": [
+        "`gzip` on a folder: `gzip: app is a directory -- ignored`. Use `tar -czf` for folders.",
+        "Checking a tool in a script with `which tool`: on some systems `which` prints text even when nothing is found. Use `command -v tool >/dev/null`."
+      ],
+      "checks": [
+        {
+          "run": "gzip app",
+          "expect": "gzip: app is a directory -- ignored"
+        }
+      ],
+      "interview_say": "gzip compresses single files and tar packs folders, so I combine them as `tar -czf`. To check which program runs, I use `type` or `command -v`; in scripts `command -v tool >/dev/null || exit 1`.",
+      "try_yourself": "Run `alias ll='ls -l'; type ll` in your terminal. What does `type` say now?"
+    },
+    {
+      "id": "d20p05",
+      "title": "Find the bug: the backup and restore test",
+      "type": "fix-bug",
+      "topic": "Packages",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`backup.sh` should make a backup of `app`, save the checksum of the backup file, and test that the backup can be restored. It prints `backup OK`, but there is no `backup.tar.gz`, and a strange file `z` appeared.",
+      "task": [
+        "Run `bash backup.sh` and read every error. Run `ls`: is there a `backup.tar.gz`?",
+        "Find 4 bugs: the tar letters, the checksum target, the missing restore folder, and the false `backup OK`.",
+        "Fix the script: use `set -e`, check the checksum with `sha256sum -c`, and compare the restore with `diff -r`.",
+        "Delete the stray file `z`, run the fixed script, and print its exit code."
+      ],
+      "hints": [
+        "`-cfz`: `f` takes `z` as the archive name. Write `-czf`.",
+        "`sha256sum app` fails: app is a folder. Hash the archive: `sha256sum backup.tar.gz > backup.sha256`.",
+        "`mkdir -p restore-test` before extracting. `set -e` stops the script at the first error, so `backup OK` only prints on success."
+      ],
+      "solution": [
+        "bash backup.sh",
+        "[ -f backup.tar.gz ] || echo \"there is no backup.tar.gz\"",
+        "[ -f z ] && echo \"but there is a stray archive called z\"",
+        "rm -f z",
+        "cat > backup.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Make a compressed backup of app/, save the checksum of the backup file,",
+        "# then test a restore into restore-test/ and compare it with app/.",
+        "set -e",
+        "tar -czf backup.tar.gz app",
+        "sha256sum backup.tar.gz > backup.sha256",
+        "sha256sum -c backup.sha256",
+        "rm -rf restore-test && mkdir -p restore-test",
+        "tar -xzf backup.tar.gz -C restore-test",
+        "diff -r app restore-test/app",
+        "echo \"backup OK: restore test passed\"",
+        "EOF",
+        "echo \"--- fixed ---\"",
+        "bash backup.sh; echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "tar -czf",
+          "meaning": "Bug 1: with `-cfz`, the archive was named `z`, and tar tried to add a missing file `backup.tar.gz`."
+        },
+        {
+          "part": "sha256sum backup.tar.gz",
+          "meaning": "Bug 2: the checksum must be of the backup file, not the folder."
+        },
+        {
+          "part": "mkdir -p restore-test",
+          "meaning": "Bug 3: tar -C needs an existing folder. The user sees this error only after bug 1 is fixed: now the extract fails earlier, because the archive does not exist."
+        },
+        {
+          "part": "set -e",
+          "meaning": "Bug 4: without it, `backup OK` printed even after three errors."
+        },
+        {
+          "part": "diff -r",
+          "meaning": "A real restore test: compare every file. No output = identical."
+        }
+      ],
+      "expected_output": "tar: backup.tar.gz: Cannot stat: No such file or directory\ntar: Exiting with failure status due to previous errors\nsha256sum: app: Is a directory\ntar (child): backup.tar.gz: Cannot open: No such file or directory\ntar (child): Error is not recoverable: exiting now\ntar: Child returned status 2\ntar: Error is not recoverable: exiting now\nbackup OK\nthere is no backup.tar.gz\nbut there is a stray archive called z\n--- fixed ---\nbackup.tar.gz: OK\nbackup OK: restore test passed\nexit code: 0",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Never testing a restore. A backup that cannot be restored is not a backup.",
+        "Keeping the checksum only next to the backup: if the disk is lost, both are lost. Store copies in another place (for example S3)."
+      ],
+      "checks": [
+        {
+          "run": "bash backup.sh",
+          "expect": "tar: backup.tar.gz: Cannot stat: No such file or directory"
+        },
+        {
+          "run": "bash backup.sh",
+          "expect": "sha256sum: app: Is a directory"
+        },
+        {
+          "run": "sed 's/-cfz/-czf/' backup.sh > b2.sh; bash b2.sh",
+          "expect": "tar: restore-test: Cannot open: No such file or directory"
+        }
+      ],
+      "interview_say": "A backup script must stop on errors (`set -e`), store a checksum of the archive, and test the restore with `tar -xzf` into a temp folder plus `diff -r`.",
+      "try_yourself": "Add a timestamp to the backup name: `backup-$(date +%Y%m%d-%H%M).tar.gz`. What else must change in the script?"
+    },
+    {
+      "id": "d20p06",
+      "title": "Downloads: redirects, -O and resume",
+      "type": "command",
+      "topic": "Packages",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Release download links often redirect (for example GitHub release links). The user learns to see a redirect, follow it, keep the remote file name, and resume a broken download.",
+      "task": [
+        "Start the test server on port 8092 in this folder.",
+        "Request `/dist` (no slash) with `curl -sI`. Read the status and `Location` header.",
+        "Follow the redirect with `-L` and show the status code.",
+        "Download with `-O` (keep the remote name) into a new folder `dl`.",
+        "Read about resume: `curl -C - -O URL` and `wget -c URL` continue a broken download."
+      ],
+      "hints": [
+        "301 / 302 = redirect; the new address is in `Location:`.",
+        "Without `-L`, curl saves the small redirect page, not the file.",
+        "`curl -O URL` saves as the last part of the URL."
+      ],
+      "solution": [
+        "python3 -m http.server 8092 --bind 127.0.0.1 > /dev/null 2>&1 &",
+        "SRV=$!",
+        "sleep 1",
+        "curl -sI http://127.0.0.1:8092/dist | grep -iE '^(HTTP|location)'",
+        "curl -sL -o /dev/null -w 'after -L: %{http_code} at %{url_effective}\\n' http://127.0.0.1:8092/dist",
+        "mkdir -p dl && (cd dl && curl -fsSO http://127.0.0.1:8092/dist/todo-cli.sh)",
+        "ls dl",
+        "kill $SRV"
+      ],
+      "explanation": [
+        {
+          "part": "301 + Location",
+          "meaning": "The server says: the real address is `/dist/`."
+        },
+        {
+          "part": "-L",
+          "meaning": "Follow redirects. `%{url_effective}` shows the final URL."
+        },
+        {
+          "part": "-O",
+          "meaning": "Save with the remote file name in the current folder."
+        },
+        {
+          "part": "-C - / wget -c",
+          "meaning": "Continue a partial download from where it stopped."
+        }
+      ],
+      "expected_output": "HTTP/1.0 301 Moved Permanently\nLocation: /dist/\nafter -L: 200 at http://127.0.0.1:8092/dist/\ntodo-cli.sh",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "A tiny downloaded file that is really an HTML redirect or error page. Use `-fL` and check with `file` or a checksum."
+      ],
+      "interview_say": "For downloads in scripts I use `curl -fsSL -o file URL`: it fails on errors and follows redirects. For big files `-C -` or `wget -c` can resume.",
+      "try_yourself": "Run `curl -sS -o page.html -w '%{http_code}\\n' http://127.0.0.1:8092/dist` (no -L) while the server runs. What is inside page.html?"
+    },
+    {
+      "id": "d20p07",
+      "title": "update-alternatives: choose the default version (read only)",
+      "type": "concept",
+      "topic": "Packages",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "The vehicle parts project needs Java 17, but the server also has Java 21. Ubuntu uses `update-alternatives` to choose which program `/usr/bin/java` points to. Changing it needs sudo and installed Java versions, so it is not run in the sandbox.",
+      "task": [
+        "Show the choices: `update-alternatives --display java` (or `--list java`).",
+        "Change the default interactively: `sudo update-alternatives --config java`.",
+        "Check with `java -version` and `readlink -f /usr/bin/java`."
+      ],
+      "hints": [
+        "`/usr/bin/java` → `/etc/alternatives/java` → the real program. Two symlinks.",
+        "`--config` shows a numbered menu; type the number and press Enter.",
+        "For an editor: `sudo update-alternatives --config editor` (nano or vim for `git commit`)."
+      ],
+      "solution": [
+        "update-alternatives --display java",
+        "sudo update-alternatives --config java",
+        "readlink -f /usr/bin/java",
+        "java -version"
+      ],
+      "explanation": [
+        {
+          "part": "--display / --list",
+          "meaning": "Show the current link and all installed choices."
+        },
+        {
+          "part": "--config NAME",
+          "meaning": "Menu to choose the default (needs sudo)."
+        },
+        {
+          "part": "readlink -f",
+          "meaning": "Follow all symlinks to the real file."
+        }
+      ],
+      "expected_output": "",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "Typical output on Ubuntu with two OpenJDK versions installed. Paths and versions depend on what is installed.",
+      "verified": false,
+      "typical_output": "java - auto mode\n  link best version is /usr/lib/jvm/java-21-openjdk-amd64/bin/java\n  link currently points to /usr/lib/jvm/java-21-openjdk-amd64/bin/java\n  link java is /usr/bin/java\n/usr/lib/jvm/java-17-openjdk-amd64/bin/java - priority 1711\n/usr/lib/jvm/java-21-openjdk-amd64/bin/java - priority 2111\nThere are 2 choices for the alternative java (providing /usr/bin/java).\n\n  Selection    Path                                         Priority   Status\n------------------------------------------------------------\n* 0            /usr/lib/jvm/java-21-openjdk-amd64/bin/java   2111      auto mode\n  1            /usr/lib/jvm/java-17-openjdk-amd64/bin/java   1711      manual mode\n  2            /usr/lib/jvm/java-21-openjdk-amd64/bin/java   2111      manual mode\n\nPress <enter> to keep the current choice[*], or type selection number: 1\nupdate-alternatives: using /usr/lib/jvm/java-17-openjdk-amd64/bin/java to provide /usr/bin/java (java) in manual mode\n/usr/lib/jvm/java-17-openjdk-amd64/bin/java\nopenjdk version \"17.0.12\" 2024-07-16",
+      "mistakes": [
+        "`update-alternatives: error: no alternatives for java`: no Java is installed yet. Install `openjdk-17-jdk` first.",
+        "Changing the system default for one project. Often better: set `JAVA_HOME` for that project or use a Docker image with the right version."
+      ],
+      "interview_say": "When several versions of a tool are installed, Ubuntu's `update-alternatives` manages the `/usr/bin` symlink. For one project I prefer `JAVA_HOME` or a container with the exact version.",
+      "try_yourself": "Run `update-alternatives --display editor` on your WSL (read only)."
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you create and extract a .tar.gz archive?",
+      "a": "Create: `tar -czf app.tar.gz app/`. List: `tar -tzf app.tar.gz`. Extract: `tar -xzf app.tar.gz -C /target`.",
+      "topic": "Packages"
+    },
+    {
+      "q": "How do you verify that a downloaded file is not changed?",
+      "a": "Compare its hash with the published one: `sha256sum -c file.sha256` (or `sha256sum file` and compare). A mismatch exits with code 1.",
+      "topic": "Packages"
+    },
+    {
+      "q": "Which package does a file belong to?",
+      "a": "On Ubuntu `dpkg -S /usr/bin/ls`; on RHEL `rpm -qf /usr/bin/ls`.",
+      "topic": "Packages"
+    },
+    {
+      "q": "What is the difference between `apt update` and `apt upgrade`?",
+      "a": "`update` refreshes the list of available packages. `upgrade` installs newer versions of installed packages.",
+      "topic": "Packages"
+    },
+    {
+      "q": "`which`, `type` or `command -v`: which one do you use in a script?",
+      "a": "`command -v tool` (POSIX, works for builtins too). `type` is good interactively; `which` only searches PATH files.",
+      "topic": "Packages"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "tar -czf / -tzf / -xzf",
+      "meaning": "Create / list / extract .tar.gz",
+      "example": "tar -xzf app.tar.gz -C /opt/app",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "tar --exclude",
+      "meaning": "Leave files out of an archive",
+      "example": "tar -czf app.tgz --exclude='.env' app",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "gzip -k / gunzip / zcat",
+      "meaning": "Compress one file / unpack / read packed",
+      "example": "zcat app.log.1.gz | grep ERROR",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "zip -r / unzip -l",
+      "meaning": "zip format",
+      "example": "zip -qr bundle.zip app",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "sha256sum / -c",
+      "meaning": "Make / check checksums",
+      "example": "sha256sum -c todo-cli.sha256",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "curl -fsSL -o / -O",
+      "meaning": "Download safely / keep remote name",
+      "example": "curl -fsSL -o tool.tgz https://example.com/tool.tgz",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "wget -q -O / -c",
+      "meaning": "Download / resume",
+      "example": "wget -c https://example.com/big.iso",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "apt update / install / remove",
+      "meaning": "Manage packages (Ubuntu)",
+      "example": "sudo apt update && sudo apt install -y jq",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "dpkg -S / -L / -l",
+      "meaning": "Owner of file / files of package / status",
+      "example": "dpkg -S /usr/bin/ls",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "apt-cache policy",
+      "meaning": "Installed and candidate version",
+      "example": "apt-cache policy nginx",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "dnf / yum / rpm -qf",
+      "meaning": "RHEL family equivalents",
+      "example": "sudo dnf install -y nginx",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "type / command -v / which",
+      "meaning": "What runs for a name",
+      "example": "command -v docker >/dev/null || echo missing",
+      "topic": "Packages"
+    },
+    {
+      "cmd": "update-alternatives",
+      "meaning": "Choose the default version",
+      "example": "sudo update-alternatives --config java",
+      "topic": "Packages"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "apt/dpkg (and dnf/yum table)",
+      "problems": [
+        "d20p03"
+      ]
+    },
+    {
+      "item": "tar (create, list, extract)",
+      "problems": [
+        "d20p01",
+        "d20p05"
+      ]
+    },
+    {
+      "item": "gzip",
+      "problems": [
+        "d20p04"
+      ]
+    },
+    {
+      "item": "zip",
+      "problems": [
+        "d20p04"
+      ]
+    },
+    {
+      "item": "sha256sum",
+      "problems": [
+        "d20p02",
+        "d20p05"
+      ]
+    },
+    {
+      "item": "wget/curl download",
+      "problems": [
+        "d20p02",
+        "d20p06"
+      ]
+    },
+    {
+      "item": "which/type/command -v",
+      "problems": [
+        "d20p04"
+      ]
+    },
+    {
+      "item": "update-alternatives idea",
+      "problems": [
+        "d20p07"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day20"
+}

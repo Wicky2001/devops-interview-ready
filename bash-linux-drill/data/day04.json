@@ -1,0 +1,747 @@
+{
+  "day": 4,
+  "week": 1,
+  "title": "Redirection and pipes",
+  "goal": "Send normal output and errors where the user wants them, and connect commands with pipes, tee and xargs.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day04 && cd ~/bash-practice/day04",
+    "# P1: a health script that prints OK lines (stdout) and FAIL lines (stderr)",
+    "printf '%s\\n' '#!/bin/bash' 'echo \"OK   nginx is running\"' 'echo \"FAIL redis is not running\" >&2' 'echo \"OK   todo-api is running\"' 'echo \"FAIL postgres port 5432 closed\" >&2' > check-services.sh",
+    "chmod +x check-services.sh",
+    "# P3: image list and temp build files (one name has a space)",
+    "printf '%s\\n' todo-frontend:1.4 todo-backend:2.1 postgres:16 > images.txt",
+    "mkdir -p tmp-build",
+    "touch tmp-build/a.tmp tmp-build/b.tmp \"tmp-build/c d.tmp\" tmp-build/keep.txt",
+    "# P5: a broken deploy step script",
+    "printf '%s\\n' '#!/bin/bash' '# Run 3 steps, keep a list of ALL steps in steps.log,' '# save stdout AND stderr of the build in build.log,' '# and restart only if the build worked.' 'build() { echo \"compiling todo-api\"; echo \"error: tests failed\" >&2; return 1; }' 'for step in lint test package; do' '  echo \"step: $step\" > steps.log' 'done' 'build 2>&1 > build.log || echo \"restarting service\"' > deploy-step.sh",
+    "cd ~/bash-practice/day04"
+  ],
+  "warmup": [
+    {
+      "q": "What number do you give `chmod` for a secret file that only the owner may read and write?",
+      "a": "`chmod 600 file`",
+      "from_day": 3
+    },
+    {
+      "q": "What does `usermod -aG docker wicky` do, and why is `-a` important?",
+      "a": "It adds wicky to the docker group. Without `-a`, the user is removed from all other extra groups.",
+      "from_day": 3
+    },
+    {
+      "q": "Which command shows lines 10 to 12 of a file?",
+      "a": "`head -n 12 file | tail -n 3`",
+      "from_day": 2
+    },
+    {
+      "q": "What does `ls -a` show that `ls` does not?",
+      "a": "Hidden files: names that start with a dot, like `.env`.",
+      "from_day": 1
+    }
+  ],
+  "problems": [
+    {
+      "id": "d04p01",
+      "title": "Split normal output and errors",
+      "type": "command",
+      "topic": "Redirection",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "A cron job runs `check-services.sh` every 5 minutes. The team wants normal lines in one file and errors in another, and sometimes everything in one log. Each program has two output streams: stdout (normal) and stderr (errors).",
+      "task": [
+        "Run `./check-services.sh`. All 4 lines appear on the screen.",
+        "Send only stdout to `ok.log` with `>`. Which lines still appear on the screen?",
+        "Send only stderr to `err.log` with `2>`, and hide stdout with `> /dev/null`.",
+        "Send both to `all.log` with `> all.log 2>&1`. Then do the same with the short form `&> all2.log`.",
+        "Try the wrong order `2>&1 > wrong.log` and look at what goes into the file."
+      ],
+      "hints": [
+        "File descriptor 1 = stdout, 2 = stderr. `>` is the same as `1>`.",
+        "`2>&1` means \"send 2 to the same place as 1 is going **now**\". Order matters.",
+        "Bash reads redirections from left to right: first `> all.log`, then `2>&1`."
+      ],
+      "solution": [
+        "./check-services.sh > ok.log                  # stdout to file; errors still on screen",
+        "echo \"--- ok.log ---\"; cat ok.log",
+        "./check-services.sh 2> err.log > /dev/null    # only errors to the file, hide the rest",
+        "echo \"--- err.log ---\"; cat err.log",
+        "./check-services.sh > all.log 2>&1            # both streams into one file",
+        "echo \"--- all.log ---\"; cat all.log",
+        "./check-services.sh &> all2.log               # bash short form of > file 2>&1",
+        "wc -l all2.log",
+        "./check-services.sh 2>&1 > wrong.log          # WRONG order: errors go to the screen",
+        "echo \"--- wrong.log ---\"; cat wrong.log"
+      ],
+      "explanation": [
+        {
+          "part": "> file",
+          "meaning": "Send stdout (stream 1) to a file. The file is emptied first."
+        },
+        {
+          "part": "2> file",
+          "meaning": "Send stderr (stream 2) to a file."
+        },
+        {
+          "part": "> /dev/null",
+          "meaning": "`/dev/null` is a special file that throws away everything written to it."
+        },
+        {
+          "part": "> all.log 2>&1",
+          "meaning": "First stdout goes to the file, then stderr follows stdout. Both end in the file."
+        },
+        {
+          "part": "&> file",
+          "meaning": "Bash shortcut for `> file 2>&1`."
+        },
+        {
+          "part": "2>&1 > wrong.log",
+          "meaning": "stderr is pointed to the screen (where stdout was at that moment), then stdout moves to the file. Errors stay on screen."
+        }
+      ],
+      "expected_output": "FAIL redis is not running\nFAIL postgres port 5432 closed\n--- ok.log ---\nOK   nginx is running\nOK   todo-api is running\n--- err.log ---\nFAIL redis is not running\nFAIL postgres port 5432 closed\n--- all.log ---\nOK   nginx is running\nFAIL redis is not running\nOK   todo-api is running\nFAIL postgres port 5432 closed\n4 all2.log\nFAIL redis is not running\nFAIL postgres port 5432 closed\n--- wrong.log ---\nOK   nginx is running\nOK   todo-api is running",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `2 > err.log` with a space. Bash then passes `2` as an argument and sends stdout to the file.",
+        "Using the wrong order `2>&1 > file` in a cron job. Errors are lost, because cron has no screen.",
+        "Writing `&2>1`. The correct text is `2>&1` (number, `>`, `&`, number)."
+      ],
+      "interview_say": "Every process has stdout (1) and stderr (2). I use `> file 2>&1` to save both, `2> file` for only errors, and `> /dev/null` to hide output. The order matters: the file redirect comes first.",
+      "try_yourself": "Run `./check-services.sh 2>&1 | grep FAIL`. Then run `./check-services.sh | grep FAIL`. Why is the output the same on the screen but not for the same reason?",
+      "table": {
+        "head": [
+          "Write",
+          "stdout goes to",
+          "stderr goes to"
+        ],
+        "rows": [
+          [
+            "`cmd > f`",
+            "f",
+            "screen"
+          ],
+          [
+            "`cmd 2> f`",
+            "screen",
+            "f"
+          ],
+          [
+            "`cmd > f 2>&1`",
+            "f",
+            "f"
+          ],
+          [
+            "`cmd &> f`",
+            "f",
+            "f"
+          ],
+          [
+            "`cmd 2>&1 > f`",
+            "f",
+            "screen"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d04p02",
+      "title": "Overwrite, append and tee: the deploy log",
+      "type": "command",
+      "topic": "Redirection",
+      "minutes": 11,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A deploy script writes one line per deploy into `deploy.log`. Yesterday the history disappeared: someone used `>` instead of `>>`. The user also wants to see messages on the screen and save them at the same time.",
+      "task": [
+        "Write `deploy v1.0` and then `deploy v1.1` into `deploy.log`, both with `>`. Show the file.",
+        "Add `deploy v1.2` with `>>`. Show the file.",
+        "Use `tee -a` to print `health check OK` on the screen **and** add it to the file.",
+        "Show the final file with `cat -n deploy.log`."
+      ],
+      "hints": [
+        "`>` replaces the file. `>>` adds to the end.",
+        "`tee` reads stdin and writes it to the screen and to a file.",
+        "`echo \"health check OK\" | tee -a deploy.log`"
+      ],
+      "solution": [
+        "echo \"deploy v1.0\" > deploy.log",
+        "echo \"deploy v1.1\" > deploy.log     # > empties the file first: v1.0 is gone",
+        "cat deploy.log",
+        "echo \"deploy v1.2\" >> deploy.log    # >> adds at the end",
+        "echo \"health check OK\" | tee -a deploy.log",
+        "echo \"--- final file ---\"",
+        "cat -n deploy.log"
+      ],
+      "explanation": [
+        {
+          "part": "> deploy.log",
+          "meaning": "Create or empty the file, then write."
+        },
+        {
+          "part": ">> deploy.log",
+          "meaning": "Append to the end. The old lines stay."
+        },
+        {
+          "part": "tee -a file",
+          "meaning": "Copy stdin to the screen and append it to the file. Without `-a`, tee replaces the file."
+        },
+        {
+          "part": "cat -n",
+          "meaning": "Print with line numbers."
+        }
+      ],
+      "expected_output": "deploy v1.1\nhealth check OK\n--- final file ---\n     1\tdeploy v1.1\n     2\tdeploy v1.2\n     3\thealth check OK",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `>` in a loop or a cron job: only the last line is kept.",
+        "Writing `tee deploy.log` without `-a`: the log is replaced, like with `>`.",
+        "Running `sudo echo x > /etc/file`. The redirect is done by the normal user, so it fails. Use `echo x | sudo tee -a /etc/file` (Extra E2)."
+      ],
+      "interview_say": "`>` overwrites and `>>` appends. When I want to see output and save it, I pipe into `tee -a logfile`.",
+      "try_yourself": "Run `set -o noclobber`, then `echo test > deploy.log`. What happens? Turn it off with `set +o noclobber`."
+    },
+    {
+      "id": "d04p03",
+      "title": "Pipes and xargs: one command for each image",
+      "type": "command",
+      "topic": "Redirection",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "The user must remove old Docker images listed in `images.txt`, and clean temp build files. To be safe, the user first prints the commands with `echo` (a dry run). One temp file has a space in its name.",
+      "task": [
+        "Use `xargs` to build one command with all images: `echo docker rmi ...`.",
+        "Use `xargs -n 1` to build one command per image.",
+        "Use `xargs -I{}` to build `docker pull registry.local/IMAGE` for each image.",
+        "Delete only the `.tmp` files in `tmp-build`, also `c d.tmp`, using `printf '%s\\0'` and `xargs -0 rm -v`.",
+        "List `tmp-build` to check that `keep.txt` is still there."
+      ],
+      "hints": [
+        "`xargs` reads words from stdin and adds them to the end of a command.",
+        "`-n 1` = one word per command. `-I{}` = put each line where `{}` is.",
+        "Names with spaces break plain xargs. Separate names with a null byte (`\\0`) and use `xargs -0`."
+      ],
+      "solution": [
+        "xargs echo docker rmi < images.txt                  # one command, all images",
+        "xargs -n 1 echo docker rmi < images.txt             # one command per image",
+        "xargs -I{} echo docker pull registry.local/{} < images.txt",
+        "printf '%s\\0' tmp-build/*.tmp | xargs -0 rm -v      # safe with spaces in names",
+        "ls tmp-build"
+      ],
+      "explanation": [
+        {
+          "part": "xargs cmd < file",
+          "meaning": "Read words from the file and run `cmd` with them as arguments."
+        },
+        {
+          "part": "echo docker rmi",
+          "meaning": "Dry run: print the command instead of running it. Remove `echo` when the list is correct."
+        },
+        {
+          "part": "-n 1",
+          "meaning": "Use at most 1 argument per command."
+        },
+        {
+          "part": "-I{}",
+          "meaning": "Run once per line and replace `{}` with the line."
+        },
+        {
+          "part": "printf '%s\\0' files | xargs -0",
+          "meaning": "Separate names with a null byte, so spaces in names are safe."
+        },
+        {
+          "part": "rm -v",
+          "meaning": "Verbose: print each file that is removed."
+        }
+      ],
+      "expected_output": "docker rmi todo-frontend:1.4 todo-backend:2.1 postgres:16\ndocker rmi todo-frontend:1.4\ndocker rmi todo-backend:2.1\ndocker rmi postgres:16\ndocker pull registry.local/todo-frontend:1.4\ndocker pull registry.local/todo-backend:2.1\ndocker pull registry.local/postgres:16\nremoved 'tmp-build/a.tmp'\nremoved 'tmp-build/b.tmp'\nremoved 'tmp-build/c d.tmp'\nkeep.txt",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`ls tmp-build/*.tmp | xargs rm` splits `c d.tmp` into two names: `rm: cannot remove 'tmp-build/c': No such file or directory`.",
+        "Running the real `docker rmi` before checking the list with `echo`."
+      ],
+      "checks": [
+        {
+          "run": "ls tmp-build/*.tmp | xargs rm",
+          "expect": "rm: cannot remove 'tmp-build/c': No such file or directory"
+        }
+      ],
+      "interview_say": "A pipe sends the output of one command into the input of the next. `xargs` turns input lines into arguments. I always do a dry run with `echo` first, and use `-0` when names can have spaces.",
+      "try_yourself": "Run `seq 1 6 | xargs -n 2 echo pair:`. Then try `-n 3`."
+    },
+    {
+      "id": "d04p04",
+      "title": "Write a config file with a here-doc",
+      "type": "command",
+      "topic": "Redirection",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A setup script must create an Nginx config for the to-do app. The port comes from a variable. A here-doc (`<<EOF`) writes many lines into a file in one command, without an editor.",
+      "task": [
+        "Set `APP=todo-api` and `PORT=8080`.",
+        "Use `cat > nginx-todo.conf <<EOF ... EOF` to write a small `server { }` block that uses `$PORT` and `$APP`.",
+        "Show the file. Check that the real port number is inside.",
+        "Print a line with `cat <<'EOF'` (quoted). See that `$APP` is NOT replaced.",
+        "Use a here-string `<<<` to split `deploy@web-01` into user and host with `read`."
+      ],
+      "hints": [
+        "Unquoted `EOF`: bash replaces variables inside. Quoted `'EOF'`: text stays exactly as written.",
+        "The last line must be only `EOF`, with no spaces before or after.",
+        "`IFS=@ read -r user host <<< \"deploy@web-01\"`"
+      ],
+      "solution": [
+        "APP=todo-api",
+        "PORT=8080",
+        "cat > nginx-todo.conf <<EOF",
+        "server {",
+        "    listen 80;",
+        "    # app: $APP",
+        "    location /api/ {",
+        "        proxy_pass http://127.0.0.1:$PORT;",
+        "    }",
+        "}",
+        "EOF",
+        "cat nginx-todo.conf",
+        "cat <<'EOF'",
+        "Quoted EOF: $APP and $(date) are not replaced",
+        "EOF",
+        "IFS=@ read -r user host <<< \"deploy@web-01\"",
+        "echo \"user=$user host=$host\""
+      ],
+      "explanation": [
+        {
+          "part": "cat > file <<EOF",
+          "meaning": "Here-doc: all lines until `EOF` become the input of `cat`, which writes them into the file."
+        },
+        {
+          "part": "$PORT inside",
+          "meaning": "With unquoted EOF, variables and `$( )` are replaced."
+        },
+        {
+          "part": "<<'EOF'",
+          "meaning": "Quoted: nothing is replaced. Use it for scripts that contain `$`."
+        },
+        {
+          "part": "<<< \"text\"",
+          "meaning": "Here-string: one string as stdin."
+        },
+        {
+          "part": "IFS=@ read -r user host",
+          "meaning": "Split the input at `@` into two variables. `IFS` is the field separator."
+        }
+      ],
+      "expected_output": "server {\n    listen 80;\n    # app: todo-api\n    location /api/ {\n        proxy_pass http://127.0.0.1:8080;\n    }\n}\nQuoted EOF: $APP and $(date) are not replaced\nuser=deploy host=web-01",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "A space after the closing `EOF`, or `EOF` indented: bash does not see the end. It prints a warning with `here-document at line 1 delimited by end-of-file`, and the `EOF ` line goes into the file.",
+        "Using unquoted `EOF` for a script that contains `$1` or `$(...)`: they are replaced too early. Use `<<'EOF'`."
+      ],
+      "checks": [
+        {
+          "run": "printf 'cat <<EOF\\nhello\\nEOF \\n' > hd.sh; bash hd.sh",
+          "expect": "here-document at line 1 delimited by end-of-file"
+        }
+      ],
+      "interview_say": "I use a here-doc to write config files from scripts. Unquoted EOF puts variables in; quoted `'EOF'` keeps the text exactly.",
+      "try_yourself": "Run `wc -w <<< \"one two three\"`. Then try `tr a-z A-Z <<< \"hello\"`."
+    },
+    {
+      "id": "d04p05",
+      "title": "Find the bug: the deploy step script",
+      "type": "fix-bug",
+      "topic": "Redirection",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "In Jenkins, `deploy-step.sh` restarted the service even though the build failed. Also `steps.log` has only one line, and the build errors are not in `build.log`. The goal is written in the comments.",
+      "task": [
+        "Read `deploy-step.sh`. Then run `bash deploy-step.sh` and look at `steps.log` and `build.log`.",
+        "Find 3 bugs: one is in the loop, one is the redirect order, one is the operator before \"restarting\".",
+        "Fix them. Run the script again and check both files."
+      ],
+      "hints": [
+        "Inside the loop, `>` empties `steps.log` every time.",
+        "`2>&1 > build.log` sends stderr to the screen. Swap the order.",
+        "`||` runs the right side when the left side **fails**. Use `if ... then ... else`."
+      ],
+      "solution": [
+        "bash deploy-step.sh",
+        "echo \"--- steps.log (before) ---\"; cat steps.log",
+        "cat > deploy-step.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Run 3 steps, keep a list of ALL steps in steps.log,",
+        "# save stdout AND stderr of the build in build.log,",
+        "# and restart only if the build worked.",
+        "build() { echo \"compiling todo-api\"; echo \"error: tests failed\" >&2; return 1; }",
+        ": > steps.log                        # start with an empty file",
+        "for step in lint test package; do",
+        "  echo \"step: $step\" >> steps.log    # >> keeps every step",
+        "done",
+        "if build > build.log 2>&1; then      # file first, then 2>&1",
+        "  echo \"restarting service\"",
+        "else",
+        "  echo \"build failed: not restarting (see build.log)\"",
+        "fi",
+        "EOF",
+        "bash deploy-step.sh",
+        "echo \"--- steps.log ---\"; cat steps.log",
+        "echo \"--- build.log ---\"; cat build.log"
+      ],
+      "explanation": [
+        {
+          "part": "Bug 1: > in the loop",
+          "meaning": "Each step emptied the file. Use `>>`, and empty the file once before the loop with `: > steps.log`."
+        },
+        {
+          "part": "Bug 2: 2>&1 > build.log",
+          "meaning": "Wrong order, errors went to the screen. Correct: `> build.log 2>&1`."
+        },
+        {
+          "part": "Bug 3: ||",
+          "meaning": "`a || b` runs `b` when `a` fails. So the service restarted after a failed build. Use `if` (or `&&`)."
+        },
+        {
+          "part": ": > file",
+          "meaning": "`:` is a command that does nothing. With `>` it just empties the file."
+        }
+      ],
+      "expected_output": "error: tests failed\nrestarting service\n--- steps.log (before) ---\nstep: package\nbuild failed: not restarting (see build.log)\n--- steps.log ---\nstep: lint\nstep: test\nstep: package\n--- build.log ---\ncompiling todo-api\nerror: tests failed",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `build && echo restart || echo failed`. If `echo restart` itself fails, `failed` also prints. An `if` is clearer.",
+        "Checking only the screen. With redirects, the useful text is in the file, so always `cat` the log."
+      ],
+      "interview_say": "`&&` runs the next command only on success and `||` only on failure. For a deploy step I use `if build > build.log 2>&1; then restart; fi`, so a failed build never restarts the service.",
+      "try_yourself": "Change `return 1` to `return 0` in the fixed script and run it. Does it restart now?"
+    },
+    {
+      "id": "d04p06",
+      "title": "Group commands: { } vs ( ), and ; && ||",
+      "type": "predict",
+      "topic": "Redirection",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A health report needs several commands in one file, and a script must look into another folder without changing its own folder. The user predicts each line before running.",
+      "task": [
+        "Predict, then run: `{ echo \"== report ==\"; echo \"disk ok\"; } > report.txt; cat report.txt`.",
+        "Predict, then run: `(cd /var/log && pwd); pwd`.",
+        "Predict, then run: `X=1; ( X=2 ); echo \"X is $X\"`.",
+        "Predict, then run: `false ; echo A`, `false && echo B`, `false || echo C`."
+      ],
+      "hints": [
+        "`{ ...; }` runs in the current shell. Note the spaces and the last `;`.",
+        "`( ... )` runs in a subshell (a copy). Changes inside do not come back.",
+        "`;` always runs the next command, `&&` only after success, `||` only after failure."
+      ],
+      "solution": [
+        "{ echo \"== report ==\"; echo \"disk ok\"; } > report.txt   # one redirect for both",
+        "cat report.txt",
+        "(cd /var/log && pwd)       # subshell: folder change stays inside",
+        "pwd                        # still in day04",
+        "X=1; ( X=2 ); echo \"X is $X\"",
+        "false ; echo \"A: after ; always\"",
+        "false && echo \"B: never printed\"",
+        "false || echo \"C: after || because false failed\""
+      ],
+      "explanation": [
+        {
+          "part": "{ a; b; } > f",
+          "meaning": "Group in the current shell. One redirect for all commands."
+        },
+        {
+          "part": "( cd x )",
+          "meaning": "Subshell. `cd` and variables inside do not change the main shell."
+        },
+        {
+          "part": "false",
+          "meaning": "A command that only fails (exit code 1). Good for tests."
+        },
+        {
+          "part": "; / && / ||",
+          "meaning": "always / only if the left side worked / only if the left side failed."
+        }
+      ],
+      "expected_output": "== report ==\ndisk ok\n/var/log\n/home/wicky/bash-practice/day04\nX is 1\nA: after ; always\nC: after || because false failed",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "`pwd` shows the folder where the user runs it.",
+      "verified": true,
+      "mistakes": [
+        "Writing `{echo a; echo b}` without spaces and the last `;`: bash sees a command called `{echo` and prints `bash: {echo: command not found`.",
+        "Expecting a variable set inside `( )` to be available later."
+      ],
+      "checks": [
+        {
+          "run": "{echo a; echo b}",
+          "expect": "bash: {echo: command not found"
+        }
+      ],
+      "interview_say": "Braces group commands in the same shell; parentheses start a subshell, so `cd` and variables inside do not leak out. I use `( cd dir && make )` in scripts to stay in my folder.",
+      "try_yourself": "Run `( exit 3 ); echo $?`. What exit code do you see?"
+    },
+    {
+      "id": "d04p07",
+      "title": "Explain the error: sudo and redirection",
+      "type": "explain-error",
+      "topic": "Redirection",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A teammate runs `sudo echo \"127.0.0.1 todo.local\" >> /etc/hosts` and gets `Permission denied`, even with sudo. The user must explain why. Here we test the same idea safely on `/root`, where a normal user cannot write.",
+      "task": [
+        "As your normal user, run `echo hi > /root/note.txt`. Read the error. (It fails, nothing is changed.)",
+        "Think: who opens the file in `sudo echo hi > /root/note.txt`? sudo or your shell?",
+        "Practise the correct pattern on a copy: copy `/etc/hosts` to `hosts-copy`, then add a line with `echo ... | tee -a hosts-copy > /dev/null`.",
+        "Read only: on a real server the fix is `echo \"127.0.0.1 todo.local\" | sudo tee -a /etc/hosts`."
+      ],
+      "hints": [
+        "The shell handles `>` before the command starts.",
+        "`sudo` gives root rights only to the command after it (`echo`), not to the shell's redirect.",
+        "`tee` opens the file itself, so `sudo tee` opens it as root."
+      ],
+      "solution": [
+        "echo hi > /root/note.txt || echo \"exit code: $?\"",
+        "cp /etc/hosts hosts-copy",
+        "echo \"127.0.0.1 todo.local\" | tee -a hosts-copy > /dev/null",
+        "tail -n 1 hosts-copy"
+      ],
+      "explanation": [
+        {
+          "part": "Permission denied",
+          "meaning": "The user's shell tries to open `/root/note.txt` for writing. The user has no write permission on `/root`."
+        },
+        {
+          "part": "sudo echo hi > file",
+          "meaning": "Same error: `echo` runs as root, but the redirect is still done by the normal shell."
+        },
+        {
+          "part": "| sudo tee -a file",
+          "meaning": "`tee` runs as root and opens the file itself. `-a` appends."
+        },
+        {
+          "part": "> /dev/null",
+          "meaning": "Hide the copy that `tee` prints on the screen."
+        }
+      ],
+      "expected_output": "bash: /root/note.txt: Permission denied\nexit code: 1\n127.0.0.1 todo.local",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `sudo bash -c 'echo ... >> /etc/hosts'` everywhere. It works, but quoting gets hard. `sudo tee -a` is simpler.",
+        "Forgetting `-a` with tee: `sudo tee /etc/hosts` replaces the whole hosts file."
+      ],
+      "interview_say": "The redirect is done by my shell, not by the command, so `sudo echo x > file` still fails. I use `echo x | sudo tee -a file` instead.",
+      "try_yourself": "Run `ls -ld /root`. Which permission bits explain the error?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "What is the difference between `>` and `>>`?",
+      "a": "`>` creates or empties the file and writes. `>>` adds to the end and keeps old content.",
+      "topic": "Redirection"
+    },
+    {
+      "q": "What does `2>&1` mean?",
+      "a": "Send stderr (2) to the same place as stdout (1) at that moment. `cmd > file 2>&1` puts both in the file.",
+      "topic": "Redirection"
+    },
+    {
+      "q": "What is `/dev/null` used for?",
+      "a": "It is a special file that throws away everything. `cmd > /dev/null 2>&1` hides all output.",
+      "topic": "Redirection"
+    },
+    {
+      "q": "What is the difference between a pipe `|` and a redirect `>`?",
+      "a": "A pipe connects the output of one command to the input of another command. A redirect sends output to a file.",
+      "topic": "Redirection"
+    },
+    {
+      "q": "What does `tee` do?",
+      "a": "It reads stdin and writes it to the screen and to a file at the same time. `tee -a` appends.",
+      "topic": "Redirection"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "> / >>",
+      "meaning": "Write (overwrite) / append stdout to a file",
+      "example": "echo done >> deploy.log",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "2>",
+      "meaning": "Send stderr to a file",
+      "example": "cmd 2> err.log",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "> file 2>&1",
+      "meaning": "Send stdout and stderr to one file",
+      "example": "./job.sh > job.log 2>&1",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "&>",
+      "meaning": "Bash short form of > file 2>&1",
+      "example": "./job.sh &> job.log",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "/dev/null",
+      "meaning": "Throw output away",
+      "example": "cmd > /dev/null 2>&1",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "|",
+      "meaning": "Pipe: output of one command into the next",
+      "example": "grep ERROR app.log | wc -l",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "tee -a",
+      "meaning": "Show on screen and append to file",
+      "example": "echo ok | tee -a deploy.log",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "| sudo tee -a",
+      "meaning": "Append to a root-owned file",
+      "example": "echo x | sudo tee -a /etc/hosts",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "xargs",
+      "meaning": "Turn input into command arguments",
+      "example": "xargs -n 1 echo docker rmi < images.txt",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "xargs -I{}",
+      "meaning": "Run once per line, {} = the line",
+      "example": "xargs -I{} echo pull {} < list",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "xargs -0",
+      "meaning": "Null-separated input (safe for spaces)",
+      "example": "printf '%s\\0' *.tmp | xargs -0 rm",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "<<EOF / <<'EOF'",
+      "meaning": "Here-doc (with / without variables)",
+      "example": "cat > app.conf <<EOF",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "<<<",
+      "meaning": "Here-string: one string as stdin",
+      "example": "wc -w <<< \"a b c\"",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "{ ...; } / ( ... )",
+      "meaning": "Group in this shell / in a subshell",
+      "example": "(cd /tmp && ls)",
+      "topic": "Redirection"
+    },
+    {
+      "cmd": "; && ||",
+      "meaning": "Always / on success / on failure",
+      "example": "mkdir -p out && cd out",
+      "topic": "Redirection"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "stdin, stdout, stderr",
+      "problems": [
+        "d04p01",
+        "d04p04"
+      ]
+    },
+    {
+      "item": "> and >>",
+      "problems": [
+        "d04p02",
+        "d04p05"
+      ]
+    },
+    {
+      "item": "2>, 2>&1, &>",
+      "problems": [
+        "d04p01",
+        "d04p05"
+      ]
+    },
+    {
+      "item": "/dev/null",
+      "problems": [
+        "d04p01",
+        "d04p07"
+      ]
+    },
+    {
+      "item": "| (pipe)",
+      "problems": [
+        "d04p02",
+        "d04p03"
+      ]
+    },
+    {
+      "item": "tee",
+      "problems": [
+        "d04p02",
+        "d04p07"
+      ]
+    },
+    {
+      "item": "xargs",
+      "problems": [
+        "d04p03"
+      ]
+    },
+    {
+      "item": "here-doc, here-string",
+      "problems": [
+        "d04p04",
+        "d04p05"
+      ]
+    },
+    {
+      "item": "grouping { } and ( )",
+      "problems": [
+        "d04p06"
+      ]
+    },
+    {
+      "item": "; && ||",
+      "problems": [
+        "d04p05",
+        "d04p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day04"
+}

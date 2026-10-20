@@ -1,0 +1,732 @@
+{
+  "day": 12,
+  "week": 2,
+  "title": "find, cut, tr, sort, uniq and xargs pipelines",
+  "goal": "Find files by name, age and size, act on them safely, and build classic one-line pipelines like \"top 10 IPs\".",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day12/night && cd ~/bash-practice/day12",
+    "# P1/P2 use srv/, P5 uses night/srv/ (the same files, so the problems do not change each other)",
+    "for s in srv night/srv; do",
+    "  mkdir -p \"$s/app/old-builds\" \"$s/nginx\" \"$s/tmp\"",
+    "  for i in 1 2 3; do echo \"log line $i\" > \"$s/app/app-$i.log\"; done",
+    "  touch -d '2 days ago' \"$s/app/app-1.log\"",
+    "  touch -d '10 days ago' \"$s/app/app-2.log\"",
+    "  touch -d '40 days ago' \"$s/app/app-3.log\"",
+    "  truncate -s 120M \"$s/app/heap-dump.hprof\"",
+    "  touch -d '3 days ago' \"$s/app/heap-dump.hprof\"",
+    "  echo 'today' > \"$s/nginx/access.log\"",
+    "  truncate -s 15M \"$s/nginx/access.log.1\"",
+    "  touch -d '8 days ago' \"$s/nginx/access.log.1\"",
+    "  touch \"$s/tmp/a.tmp\" \"$s/tmp/b.tmp\" \"$s/tmp/my file.tmp\" \"$s/tmp/keep.conf\"",
+    "  touch -d '5 days ago' \"$s/tmp/a.tmp\" \"$s/tmp/b.tmp\" \"$s/tmp/my file.tmp\"",
+    "  touch -d '30 days ago' \"$s/app/old-builds\"",
+    "done",
+    "# P3: an access log with 12 client IPs (fixed counts)",
+    "n=0",
+    "for spec in 10.0.0.5:31 10.0.0.7:24 192.168.1.20:19 10.0.0.9:15 172.16.0.3:12 10.0.0.11:10 10.0.0.12:8 10.0.0.13:6 10.0.0.14:5 10.0.0.15:4 10.0.0.16:3 10.0.0.17:1; do",
+    "  ip=${spec%:*}; count=${spec#*:}",
+    "  for ((i = 0; i < count; i++)); do n=$((n + 1)); echo \"$ip - - [20/Oct/2026:10:00:$((n % 60))] \\\"GET /api/todos HTTP/1.1\\\" 200 512\"; done",
+    "done > access.log",
+    "# P4: data to reshape",
+    "printf '%s\\n' 'root:x:0:0:root:/root:/bin/bash' 'wicky:x:1000:1000:Pasindu:/home/wicky:/bin/bash' 'jenkins:x:998:998:Jenkins:/var/lib/jenkins:/bin/bash' 'nginx:x:997:997:web:/var/www:/usr/sbin/nologin' > users.db",
+    "printf '%s\\n' 'a3f9c1e7d2b4 fix login bug' '9b1d77e0aa31 add health endpoint' > commits.txt",
+    "printf 'web-01\\r\\nweb-02\\r\\n' > hosts-windows.txt",
+    "printf '%s\\n' web-01 web-02 db-01 > hosts.txt",
+    "printf '%s\\n' 10.0.1.10 10.0.1.11 10.0.2.20 > ips.txt",
+    "# P5: two .log files in night/ (they make an unquoted *.log expand) and a broken cleanup script",
+    "echo x > night/cleanup.log; echo y > night/run.log",
+    "printf '%s\\n' '#!/bin/bash' '# 1) list .log files under srv/ that are older than 7 days' '# 2) show the 3 biggest files under srv/ (size in bytes, biggest first)' '# 3) delete the .tmp files in srv/tmp (names may contain spaces)' 'find srv -name *.log -mtime 7' \"find srv -type f -printf '%s %p\\\\n' | sort | head -n 3\" \"find srv/tmp -name '*.tmp' | xargs rm\" > night/cleanup.sh",
+    "# P7: a fake 1-second health check",
+    "printf '%s\\n' '#!/bin/bash' 'sleep 1' 'echo \"$1 ok\"' > check.sh",
+    "chmod +x check.sh",
+    "# P6: a disk report with human sizes",
+    "printf '%s\\n' 'logs 1.5G' 'docker 12G' 'home 800M' 'tmp 40K' 'jenkins 3.2G' > disk.txt",
+    "cd ~/bash-practice/day12"
+  ],
+  "warmup": [
+    {
+      "q": "Which sed command prints only lines 5 to 8?",
+      "a": "`sed -n '5,8p' file`",
+      "from_day": 11
+    },
+    {
+      "q": "How do you print the first column of a CSV with awk?",
+      "a": "`awk -F, '{print $1}' file.csv`",
+      "from_day": 11
+    },
+    {
+      "q": "What does `grep -rl db01 configs/` print?",
+      "a": "Only the names of the files under `configs/` that contain `db01`.",
+      "from_day": 10
+    },
+    {
+      "q": "Which loop is safe for file names with spaces: `for f in $(ls)` or `for f in *`?",
+      "a": "`for f in *` (and quote `\"$f\"` inside).",
+      "from_day": 8
+    }
+  ],
+  "problems": [
+    {
+      "id": "d12p01",
+      "title": "find files by name, type, age and size",
+      "type": "command",
+      "topic": "Files",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The research server's disk is almost full. Before deleting anything, the user must list: all log files, logs older than 7 days, big files over 10 MB, and old folders. The files are under `srv/`.",
+      "task": [
+        "List all regular files ending in `.log` under `srv` (`-type f -name`).",
+        "List files modified more than 7 days ago (`-mtime +7`).",
+        "List files bigger than 10 MB (`-size +10M`).",
+        "Combine: `.log` files that are older than 7 days.",
+        "List folders (`-type d`) that were not changed for more than 20 days. Add `| sort` to every command so the order is stable."
+      ],
+      "hints": [
+        "Always quote the pattern: `-name '*.log'`, or bash expands it first.",
+        "`-mtime +7` = more than 7 full days ago. `-mtime -2` = less than 2 days ago.",
+        "Size units: `k`, `M`, `G`. `+10M` = more than 10 MB."
+      ],
+      "solution": [
+        "find srv -type f -name '*.log' | sort",
+        "echo \"=== older than 7 days ===\"",
+        "find srv -type f -mtime +7 | sort",
+        "echo \"=== bigger than 10 MB ===\"",
+        "find srv -type f -size +10M | sort",
+        "echo \"=== .log and older than 7 days ===\"",
+        "find srv -type f -name '*.log' -mtime +7 | sort",
+        "echo \"=== old folders ===\"",
+        "find srv -type d -mtime +20 | sort"
+      ],
+      "explanation": [
+        {
+          "part": "find srv",
+          "meaning": "Start searching in `srv` and go into every sub-folder."
+        },
+        {
+          "part": "-type f / -type d",
+          "meaning": "Only regular files / only folders (directories)."
+        },
+        {
+          "part": "-name '*.log'",
+          "meaning": "Name pattern. Quote it so find gets the `*`, not bash."
+        },
+        {
+          "part": "-mtime +7",
+          "meaning": "Modified more than 7 days ago (in whole days)."
+        },
+        {
+          "part": "-size +10M",
+          "meaning": "Bigger than 10 MB. `-size -1k` would be smaller than 1 KB."
+        },
+        {
+          "part": "tests side by side",
+          "meaning": "Several tests mean AND: every test must be true. Use `-o` for OR."
+        }
+      ],
+      "expected_output": "srv/app/app-1.log\nsrv/app/app-2.log\nsrv/app/app-3.log\nsrv/nginx/access.log\n=== older than 7 days ===\nsrv/app/app-2.log\nsrv/app/app-3.log\nsrv/nginx/access.log.1\n=== bigger than 10 MB ===\nsrv/app/heap-dump.hprof\nsrv/nginx/access.log.1\n=== .log and older than 7 days ===\nsrv/app/app-2.log\nsrv/app/app-3.log\n=== old folders ===\nsrv/app/old-builds",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "`access.log.1` and `heap-dump.hprof` are sparse files: they report a big size but use almost no disk space. They are safe practice files.",
+      "verified": true,
+      "mistakes": [
+        "`find srv -name *.log` without quotes: if the current folder has .log files, bash expands the pattern and find gets the wrong arguments (see P5).",
+        "`-mtime 7` (no plus) means exactly 7 days old, which is usually not what the user wants.",
+        "Putting the path last: `find -name '*.log' srv` gives the error `find: paths must precede expression`, and it names `srv`."
+      ],
+      "checks": [
+        {
+          "run": "find -name '*.log' srv",
+          "expect": "find: paths must precede expression: `srv'"
+        }
+      ],
+      "interview_say": "I use `find PATH -type f -name '*.log' -mtime +7 -size +10M` to list files by name, age and size. I always quote the name pattern, and I list before I delete.",
+      "try_yourself": "Find files changed in the last 60 minutes: `find srv -mmin -60`. Then `touch srv/app/app-1.log` and run it again."
+    },
+    {
+      "id": "d12p02",
+      "title": "find -exec and -delete, safely",
+      "type": "command",
+      "topic": "Files",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Now the user acts on the files: delete old temp files, and compress logs older than 7 days. A wrong `find -delete` can remove the wrong files, so the user always runs the same command with `-print` first.",
+      "task": [
+        "Dry run: list `.tmp` files in `srv/tmp` older than 3 days with `-print`.",
+        "Run the same command with `-delete` instead. List `srv/tmp` after.",
+        "Compress `.log` files older than 7 days with `-exec gzip -v {} \\;`.",
+        "List the `.gz` files that now exist."
+      ],
+      "hints": [
+        "Same command, two steps: first `-print`, then `-delete`. Change nothing else.",
+        "`{}` is replaced by each file name. `\\;` ends the `-exec` command (one run per file).",
+        "`-exec cmd {} +` runs `cmd` once with many files: faster."
+      ],
+      "solution": [
+        "find srv/tmp -type f -name '*.tmp' -mtime +3 -print | sort      # 1. dry run",
+        "find srv/tmp -type f -name '*.tmp' -mtime +3 -delete            # 2. same test, delete",
+        "ls srv/tmp",
+        "find srv -type f -name '*.log' -mtime +7 -exec gzip -v {} \\;",
+        "find srv -name '*.gz' | sort"
+      ],
+      "explanation": [
+        {
+          "part": "-print first",
+          "meaning": "See exactly which files match. Only then use `-delete`."
+        },
+        {
+          "part": "-delete",
+          "meaning": "Delete every match. Put it last, after all tests."
+        },
+        {
+          "part": "-exec gzip -v {} \\;",
+          "meaning": "Run `gzip -v FILE` for each match. `\\;` = end of the command."
+        },
+        {
+          "part": "gzip -v",
+          "meaning": "Compress and replace the file with `.gz`; `-v` prints the result."
+        },
+        {
+          "part": "{} +",
+          "meaning": "Pass many files at once: `gzip a b c` instead of 3 runs."
+        }
+      ],
+      "expected_output": "srv/tmp/a.tmp\nsrv/tmp/b.tmp\nsrv/tmp/my file.tmp\nkeep.conf\nsrv/app/app-3.log:\t-18.2% -- replaced with srv/app/app-3.log.gz\nsrv/app/app-2.log:\t-18.2% -- replaced with srv/app/app-2.log.gz\nsrv/app/app-2.log.gz\nsrv/app/app-3.log.gz",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "`find` lists files in the order of the folder on disk, so the two gzip lines can be in a different order on the user's machine.",
+      "verified": true,
+      "mistakes": [
+        "Putting `-delete` first: `find srv -delete -name '*.tmp'` deletes **everything** under srv before testing the name.",
+        "Forgetting `\\;` or `+`: find stops with `find: missing argument to` and names `-exec`.",
+        "Deleting logs that a program still writes to. Compress old rotated logs only; for live logs use logrotate (Day 16)."
+      ],
+      "checks": [
+        {
+          "run": "find srv -name '*.log' -exec ls {}",
+          "expect": "find: missing argument to `-exec'"
+        }
+      ],
+      "interview_say": "Before `find -delete` I run the same command with `-print`. I put `-delete` at the end. For other actions I use `-exec cmd {} +` to run the command on many files at once.",
+      "try_yourself": "Compress with the `+` form and see the difference: `find srv -name '*.log' -exec ls -l {} +`."
+    },
+    {
+      "id": "d12p03",
+      "title": "The classic: top 10 client IPs",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "The API gets many requests and the team suspects one client is flooding it. The interviewer's favourite one-liner: show the 10 IP addresses with the most requests in the access log, with counts.",
+      "task": [
+        "Print the first field (IP) of each line.",
+        "Sort the IPs so equal ones are together, and count them with `uniq -c`.",
+        "Sort the counts as numbers, biggest first (`sort -rn`).",
+        "Keep the first 10 lines.",
+        "Do the same with `cut -d' ' -f1` instead of awk. Then show only the top 1 IP."
+      ],
+      "hints": [
+        "`awk '{print $1}' access.log`",
+        "`... | sort | uniq -c | sort -rn | head -n 10`",
+        "`-n` = numeric sort, `-r` = reverse (biggest first)."
+      ],
+      "solution": [
+        "awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -n 10",
+        "echo \"=== with cut, top 1 ===\"",
+        "cut -d' ' -f1 access.log | sort | uniq -c | sort -rn | head -n 1",
+        "echo \"=== total requests and unique IPs ===\"",
+        "wc -l < access.log",
+        "cut -d' ' -f1 access.log | sort -u | wc -l"
+      ],
+      "explanation": [
+        {
+          "part": "awk '{print $1}'",
+          "meaning": "Take the IP (first field)."
+        },
+        {
+          "part": "sort",
+          "meaning": "Put equal IPs next to each other, so uniq can count them."
+        },
+        {
+          "part": "uniq -c",
+          "meaning": "Count each group: `31 10.0.0.5`."
+        },
+        {
+          "part": "sort -rn",
+          "meaning": "Sort by the number, biggest first. Without `-n`, `9` comes after `31` (text order)."
+        },
+        {
+          "part": "head -n 10",
+          "meaning": "Keep the top 10."
+        },
+        {
+          "part": "cut -d' ' -f1",
+          "meaning": "Same as awk here: field 1, with space as delimiter."
+        }
+      ],
+      "expected_output": "     31 10.0.0.5\n     24 10.0.0.7\n     19 192.168.1.20\n     15 10.0.0.9\n     12 172.16.0.3\n     10 10.0.0.11\n      8 10.0.0.12\n      6 10.0.0.13\n      5 10.0.0.14\n      4 10.0.0.15\n=== with cut, top 1 ===\n     31 10.0.0.5\n=== total requests and unique IPs ===\n138\n12",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting the first `sort`: `uniq -c` counts only neighbours, so one IP appears many times.",
+        "`sort -r` without `-n`: text order puts `9` before `31`, because `9` > `3`."
+      ],
+      "interview_say": "`awk '{print $1}' access.log | sort | uniq -c | sort -rn | head` gives the top IPs. The first sort groups equal lines, uniq counts them, and `sort -rn` puts the biggest count first.",
+      "try_yourself": "Show the top status codes instead: which field number is the status code in this log format?"
+    },
+    {
+      "id": "d12p04",
+      "title": "Reshape text: cut, tr and paste",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Small reshaping jobs: take user names and home folders from a passwd-style file, short git commit ids, fix a host list that came from Windows (with hidden `\\r` characters), and join two lists side by side.",
+      "task": [
+        "From `users.db` (separated by `:`), print fields 1 and 6.",
+        "From `commits.txt`, print the first 7 characters of each line (short SHA).",
+        "Show the hidden characters of `hosts-windows.txt` with `cat -A`. Remove the `\\r` with `tr -d '\\r'`.",
+        "Change `hosts.txt` to upper case with `tr`, and squeeze repeated spaces with `tr -s ' '`.",
+        "Join `hosts.txt` and `ips.txt` side by side with `paste`, and join all hosts into one line with commas (`paste -sd,`)."
+      ],
+      "hints": [
+        "`cut -d: -f1,6` = delimiter `:`, fields 1 and 6. `cut -c1-7` = characters 1 to 7.",
+        "`cat -A` shows `^M` for `\\r` and `$` at each line end.",
+        "`tr 'a-z' 'A-Z'` maps lower to upper. `paste -sd, file` = serial, delimiter comma."
+      ],
+      "solution": [
+        "cut -d: -f1,6 users.db",
+        "cut -c1-7 commits.txt",
+        "cat -A hosts-windows.txt",
+        "tr -d '\\r' < hosts-windows.txt | cat -A",
+        "tr 'a-z' 'A-Z' < hosts.txt",
+        "echo \"too    many     spaces\" | tr -s ' '",
+        "paste hosts.txt ips.txt",
+        "paste -sd, hosts.txt"
+      ],
+      "explanation": [
+        {
+          "part": "cut -d: -f1,6",
+          "meaning": "Split at `:` and keep fields 1 and 6 (user and home)."
+        },
+        {
+          "part": "cut -c1-7",
+          "meaning": "Keep characters 1 to 7."
+        },
+        {
+          "part": "cat -A",
+          "meaning": "Show hidden characters: `^M` = Windows `\\r`, `$` = end of line."
+        },
+        {
+          "part": "tr -d '\\r'",
+          "meaning": "Delete every `\\r`. Fixes files edited on Windows (`$'\\r': command not found` in scripts)."
+        },
+        {
+          "part": "tr 'a-z' 'A-Z' / tr -s ' '",
+          "meaning": "Map characters / squeeze repeats into one."
+        },
+        {
+          "part": "paste a b / paste -sd,",
+          "meaning": "Join lines side by side (TAB between) / join all lines of one file with commas."
+        }
+      ],
+      "expected_output": "root:/root\nwicky:/home/wicky\njenkins:/var/lib/jenkins\nnginx:/var/www\na3f9c1e\n9b1d77e\nweb-01^M$\nweb-02^M$\nweb-01$\nweb-02$\nWEB-01\nWEB-02\nDB-01\ntoo many spaces\nweb-01\t10.0.1.10\nweb-02\t10.0.1.11\ndb-01\t10.0.2.20\nweb-01,web-02,db-01",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "`tr` does not take a file name: `tr 'a-z' 'A-Z' hosts.txt` gives `tr: extra operand ‘hosts.txt’`. Use `< hosts.txt`.",
+        "A script written in Windows Notepad fails with `$'\\r': command not found`. Fix it with `tr -d '\\r'` or `dos2unix`.",
+        "`cut` with spaces: many spaces in a row create empty fields. Use `tr -s ' '` first, or `awk`."
+      ],
+      "checks": [
+        {
+          "run": "tr 'a-z' 'A-Z' hosts.txt",
+          "expect": "tr: extra operand ‘hosts.txt’"
+        },
+        {
+          "run": "printf 'echo hi\\r\\n\\r\\n' > w.sh; bash w.sh",
+          "expect": "$'\\r': command not found"
+        }
+      ],
+      "interview_say": "`cut` takes fields or characters, `tr` translates or deletes characters, and `paste` joins lines. `tr -d '\\r'` is my fix for files that came from Windows.",
+      "try_yourself": "Run `cut -d: -f7 users.db | sort | uniq -c`. How many users have each shell?"
+    },
+    {
+      "id": "d12p05",
+      "title": "Find the bug: the cleanup script",
+      "type": "fix-bug",
+      "topic": "Files",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": "night",
+      "situation": "`cleanup.sh` runs every night. It prints a strange find error, shows the wrong \"biggest\" files, and fails to delete one temp file. The goals are in the comments.",
+      "task": [
+        "Run `bash cleanup.sh` and read every error line.",
+        "Find 4 bugs: an unquoted pattern, a wrong `-mtime`, a wrong sort, and xargs with spaces.",
+        "Fix them and run again. The biggest file must be `heap-dump.hprof`, and `srv/tmp` must keep only `keep.conf`."
+      ],
+      "hints": [
+        "There are two `.log` files in `night/`, so `*.log` becomes `cleanup.log run.log`.",
+        "`-mtime 7` = exactly 7 days. Use `+7`. Sizes are numbers: `sort -rn`.",
+        "Use `find ... -delete`, or `-print0 | xargs -0 rm`, for names with spaces."
+      ],
+      "solution": [
+        "bash cleanup.sh",
+        "echo \"--- fixed ---\"",
+        "cat > cleanup.sh <<'EOF'",
+        "#!/bin/bash",
+        "# 1) list .log files under srv/ that are older than 7 days",
+        "# 2) show the 3 biggest files under srv/ (size in bytes, biggest first)",
+        "# 3) delete the .tmp files in srv/tmp (names may contain spaces)",
+        "find srv -name '*.log' -mtime +7 | sort",
+        "find srv -type f -printf '%s %p\\n' | sort -rn | head -n 3",
+        "find srv/tmp -name '*.tmp' -print0 | xargs -0 rm -v",
+        "EOF",
+        "bash cleanup.sh",
+        "ls srv/tmp"
+      ],
+      "explanation": [
+        {
+          "part": "-name '*.log'",
+          "meaning": "Bug 1: unquoted, bash expanded it to `cleanup.log run.log`: `paths must precede expression`."
+        },
+        {
+          "part": "-mtime +7",
+          "meaning": "Bug 2: `7` = exactly 7 days; `+7` = more than 7 days."
+        },
+        {
+          "part": "sort -rn",
+          "meaning": "Bug 3: plain `sort` is text order and smallest first. Sizes need numeric, reverse."
+        },
+        {
+          "part": "-print0 | xargs -0",
+          "meaning": "Bug 4: `my file.tmp` was split into `my` and `file.tmp`. Null-separated names are safe."
+        },
+        {
+          "part": "-printf '%s %p\\n'",
+          "meaning": "GNU find: print size in bytes and path."
+        }
+      ],
+      "expected_output": "find: paths must precede expression: `run.log'\nfind: possible unquoted pattern after predicate `-name'?\n0 srv/tmp/a.tmp\n0 srv/tmp/b.tmp\n0 srv/tmp/keep.conf\nrm: cannot remove 'srv/tmp/my': No such file or directory\nrm: cannot remove 'file.tmp': No such file or directory\n--- fixed ---\nsrv/app/app-2.log\nsrv/app/app-3.log\n125829120 srv/app/heap-dump.hprof\n15728640 srv/nginx/access.log.1\n11 srv/app/app-3.log\nremoved 'srv/tmp/my file.tmp'\nkeep.conf",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Running the broken script in a folder without `.log` files: bug 1 hides, because the pattern is not expanded there. It breaks only in some folders.",
+        "Using `ls -S` for the biggest files: it does not search sub-folders. `find -printf` or `du` (Day 17) does."
+      ],
+      "checks": [
+        {
+          "run": "bash cleanup.sh",
+          "expect": "find: paths must precede expression: `run.log'"
+        },
+        {
+          "run": "bash cleanup.sh",
+          "expect": "rm: cannot remove 'srv/tmp/my': No such file or directory"
+        }
+      ],
+      "interview_say": "In cleanup scripts I quote find patterns, use `-mtime +N`, sort sizes with `sort -rn`, and use `-delete` or `-print0 | xargs -0` so names with spaces are safe.",
+      "try_yourself": "Run `cd srv && find . -name *.log` (no quotes) inside `srv`, where no .log file is in the top folder. Why does it work there?"
+    },
+    {
+      "id": "d12p06",
+      "title": "sort by a column: -k -t -h -u",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "`du -h` style reports show sizes like `800M`, `1.5G`, `12G`. Sorting them as text or as plain numbers gives the wrong order. `sort -h` understands human sizes, and `-k` picks the column.",
+      "task": [
+        "Sort `disk.txt` by the second column as text: `sort -k2`.",
+        "Sort it with `-n`. Is it right?",
+        "Sort it with `-h` (human numbers), biggest first.",
+        "Sort `users.db` by the user id (field 3, separator `:`) as numbers."
+      ],
+      "hints": [
+        "`-k2` = sort by column 2 (to the end of the line). `-k2,2` = only column 2.",
+        "`-h` knows that `1.5G` > `800M`.",
+        "`-t:` sets the separator: `sort -t: -k3,3 -n users.db`."
+      ],
+      "solution": [
+        "sort -k2 disk.txt",
+        "echo \"=== -n (wrong for units) ===\"",
+        "sort -k2 -n disk.txt",
+        "echo \"=== -h, biggest first ===\"",
+        "sort -k2 -h -r disk.txt",
+        "echo \"=== users by id ===\"",
+        "sort -t: -k3,3 -n users.db | cut -d: -f1,3"
+      ],
+      "explanation": [
+        {
+          "part": "-k2",
+          "meaning": "Use column 2 as the sort key."
+        },
+        {
+          "part": "-n",
+          "meaning": "Numeric, but it ignores units: `12G` is smaller than `40K` because 12 < 40."
+        },
+        {
+          "part": "-h",
+          "meaning": "Human-readable numbers: K < M < G."
+        },
+        {
+          "part": "-t: -k3,3",
+          "meaning": "Separator `:`, key is field 3 only."
+        }
+      ],
+      "expected_output": "logs 1.5G\ndocker 12G\njenkins 3.2G\ntmp 40K\nhome 800M\n=== -n (wrong for units) ===\nlogs 1.5G\njenkins 3.2G\ndocker 12G\ntmp 40K\nhome 800M\n=== -h, biggest first ===\ndocker 12G\njenkins 3.2G\nlogs 1.5G\nhome 800M\ntmp 40K\n=== users by id ===\nroot:0\nnginx:997\njenkins:998\nwicky:1000",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `-k3` instead of `-k3,3`: the key runs to the end of the line, which can change ties."
+      ],
+      "interview_say": "`sort -k` picks a column, `-t` sets the separator, `-n` sorts numbers, and `-h` sorts human sizes like `du -h` output. `du -sh * | sort -h` shows the biggest folders last.",
+      "try_yourself": "Run `sort -u -t: -k7,7 users.db | cut -d: -f7`. What does `-u` with a key do?"
+    },
+    {
+      "id": "d12p07",
+      "title": "xargs -n and -P: checks in parallel",
+      "type": "command",
+      "topic": "Text",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A health check takes 1 second per server. For 4 servers that is 4 seconds one by one. `xargs -P` runs several at the same time. Here a `sleep 1` is the fake check, so it is safe to run.",
+      "task": [
+        "Run the fake check `./check.sh HOST` for 4 hosts one by one with `xargs -n 1`, and measure the time with `SECONDS`.",
+        "Run them with `-P 4` (4 at the same time) and measure again.",
+        "Sort the parallel output: the order of finished jobs can change every run."
+      ],
+      "hints": [
+        "`SECONDS` is a bash variable: seconds since the shell started. Set it to 0 first.",
+        "`printf '%s\\n' web-01 web-02 web-03 web-04 | xargs -n 1 -P 4 ./check.sh`",
+        "Parallel output order is not fixed, so add `| sort`."
+      ],
+      "solution": [
+        "SECONDS=0",
+        "printf '%s\\n' web-01 web-02 web-03 web-04 | xargs -n 1 ./check.sh",
+        "SEQ=$SECONDS",
+        "SECONDS=0",
+        "printf '%s\\n' web-01 web-02 web-03 web-04 | xargs -n 1 -P 4 ./check.sh | sort",
+        "PAR=$SECONDS",
+        "echo \"one by one: ${SEQ}s, parallel: ${PAR}s\"",
+        "[ \"$PAR\" -lt \"$SEQ\" ] && echo \"parallel is faster\""
+      ],
+      "explanation": [
+        {
+          "part": "-n 1",
+          "meaning": "One argument per command run."
+        },
+        {
+          "part": "-P 4",
+          "meaning": "Up to 4 commands at the same time."
+        },
+        {
+          "part": "./check.sh HOST",
+          "meaning": "The fake check: it sleeps 1 second and prints `HOST ok`."
+        },
+        {
+          "part": "SECONDS",
+          "meaning": "Bash counts seconds; set it to 0 to start a stopwatch."
+        }
+      ],
+      "expected_output": "web-01 ok\nweb-02 ok\nweb-03 ok\nweb-04 ok\nweb-01 ok\nweb-02 ok\nweb-03 ok\nweb-04 ok\none by one: 5s, parallel: 1s\nparallel is faster",
+      "expect_exit": 0,
+      "output_check": false,
+      "output_note": "The seconds can be a little different. The parallel run should take about 1 second instead of about 4.",
+      "verified": true,
+      "mistakes": [
+        "Using `-P` with commands that write to the same file: the lines can mix. Write to separate files or use `| sort`.",
+        "Using a very big `-P` against a production API: it looks like an attack. Keep it small."
+      ],
+      "interview_say": "`xargs -P N` runs up to N commands in parallel, which is useful for checks on many servers. I sort the output because the order of finished jobs is not fixed.",
+      "try_yourself": "Try `-P 2`. How many seconds does it take now?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you find log files bigger than 100 MB and older than 30 days?",
+      "a": "`find /var/log -type f -name '*.log' -size +100M -mtime +30`.",
+      "topic": "Files"
+    },
+    {
+      "q": "How do you safely delete files found by find?",
+      "a": "Run the command with `-print` first to check the list, then the same command with `-delete` at the end. For names with spaces use `-print0 | xargs -0`.",
+      "topic": "Files"
+    },
+    {
+      "q": "How do you get the top 10 IP addresses from an access log?",
+      "a": "`awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -n 10`.",
+      "topic": "Text"
+    },
+    {
+      "q": "What does `tr -d '\\r'` fix?",
+      "a": "Files with Windows line endings. The `\\r` makes scripts fail with `$'\\r': command not found`.",
+      "topic": "Text"
+    },
+    {
+      "q": "What is the difference between `-exec cmd {} \\;` and `-exec cmd {} +`?",
+      "a": "`\\;` runs the command once per file. `+` runs it once with many files, which is faster.",
+      "topic": "Files"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "find -type f -name '*.log'",
+      "meaning": "Find files by name",
+      "example": "find /var/log -type f -name '*.log'",
+      "topic": "Files"
+    },
+    {
+      "cmd": "find -mtime +N / -mmin -N",
+      "meaning": "Older than N days / newer than N minutes",
+      "example": "find srv -mtime +7",
+      "topic": "Files"
+    },
+    {
+      "cmd": "find -size +10M",
+      "meaning": "Bigger than 10 MB",
+      "example": "find / -xdev -size +500M",
+      "topic": "Files"
+    },
+    {
+      "cmd": "find ... -print / -delete",
+      "meaning": "Dry run, then delete",
+      "example": "find tmp -name '*.tmp' -mtime +3 -delete",
+      "topic": "Files"
+    },
+    {
+      "cmd": "find -exec cmd {} \\; / {} +",
+      "meaning": "Run a command per file / for many files",
+      "example": "find . -name '*.log' -exec gzip {} +",
+      "topic": "Files"
+    },
+    {
+      "cmd": "find -print0 | xargs -0",
+      "meaning": "Safe for names with spaces",
+      "example": "find tmp -name '*.tmp' -print0 | xargs -0 rm",
+      "topic": "Files"
+    },
+    {
+      "cmd": "cut -d: -f1,6 / -c1-7",
+      "meaning": "Fields / characters",
+      "example": "cut -d: -f1 /etc/passwd",
+      "topic": "Text"
+    },
+    {
+      "cmd": "tr 'a-z' 'A-Z' / tr -d / tr -s",
+      "meaning": "Map / delete / squeeze characters",
+      "example": "tr -d '\\r' < win.txt > unix.txt",
+      "topic": "Text"
+    },
+    {
+      "cmd": "paste a b / paste -sd,",
+      "meaning": "Join files side by side / lines into one",
+      "example": "paste -sd, hosts.txt",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sort -rn | head",
+      "meaning": "Biggest numbers first",
+      "example": "sort | uniq -c | sort -rn | head",
+      "topic": "Text"
+    },
+    {
+      "cmd": "sort -k2 -h -t:",
+      "meaning": "By column, human sizes, separator",
+      "example": "du -sh * | sort -h",
+      "topic": "Text"
+    },
+    {
+      "cmd": "xargs -n 1 -P 4",
+      "meaning": "One item per run, 4 in parallel",
+      "example": "xargs -P 4 -I{} curl -s {} < urls",
+      "topic": "Text"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "find -name, -type",
+      "problems": [
+        "d12p01",
+        "d12p05"
+      ]
+    },
+    {
+      "item": "find -mtime, -size",
+      "problems": [
+        "d12p01",
+        "d12p05"
+      ]
+    },
+    {
+      "item": "find -exec, -delete",
+      "problems": [
+        "d12p02",
+        "d12p05"
+      ]
+    },
+    {
+      "item": "cut",
+      "problems": [
+        "d12p03",
+        "d12p04"
+      ]
+    },
+    {
+      "item": "tr",
+      "problems": [
+        "d12p04"
+      ]
+    },
+    {
+      "item": "sort -k -n -r -u",
+      "problems": [
+        "d12p03",
+        "d12p05",
+        "d12p06"
+      ]
+    },
+    {
+      "item": "uniq -c",
+      "problems": [
+        "d12p03"
+      ]
+    },
+    {
+      "item": "paste",
+      "problems": [
+        "d12p04"
+      ]
+    },
+    {
+      "item": "The \"top 10 IPs\" pipeline",
+      "problems": [
+        "d12p03"
+      ]
+    },
+    {
+      "item": "xargs -n -P",
+      "problems": [
+        "d12p05",
+        "d12p07"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day12"
+}

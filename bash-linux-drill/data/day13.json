@@ -1,0 +1,745 @@
+{
+  "day": 13,
+  "week": 2,
+  "title": "Strings, parameter expansion and dates",
+  "goal": "Cut and change text inside variables without extra tools, and make correct dates and file names for backups and releases.",
+  "minutes": 90,
+  "setup": [
+    "mkdir -p ~/bash-practice/day13 && cd ~/bash-practice/day13",
+    "# P5: a broken release-name script",
+    "printf '%s\\n' '#!/bin/bash' '# Usage: release-name.sh <archive-path> <build-date>' '# Prints:' '#   name:    todo-api-2.4.1   (file name without .tar.gz)' '#   tag:     2-4-1            (version, every dot changed to a dash)' '#   date:    2026-10-20       (build date as YYYY-MM-DD)' '#   workdir: a NEW empty folder, also when the script runs twice' 'FILE=${1##*/}' 'NAME=${FILE%.*}' 'VERSION=${NAME#todo-api-}' 'TAG=${VERSION/./-}' 'BUILD_DATE=$(date -d \"$2\" +%d-%m-%Y)' 'WORKDIR=release-work' 'mkdir $WORKDIR' 'echo \"name:    $NAME\"' 'echo \"tag:     $TAG\"' 'echo \"date:    $BUILD_DATE\"' 'echo \"workdir: $WORKDIR\"' > release-name.sh",
+    "cd ~/bash-practice/day13"
+  ],
+  "warmup": [
+    {
+      "q": "Which pipeline gives the top 10 IPs of an access log?",
+      "a": "`awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -n 10`",
+      "from_day": 12
+    },
+    {
+      "q": "How do you find `.log` files older than 7 days under `/var/log`?",
+      "a": "`find /var/log -type f -name '*.log' -mtime +7`",
+      "from_day": 12
+    },
+    {
+      "q": "How do you replace `8080` with `9090` in a file and keep a backup?",
+      "a": "`sed -i.bak 's/8080/9090/' app.conf`",
+      "from_day": 11
+    },
+    {
+      "q": "Why must find patterns like `*.log` be quoted?",
+      "a": "Without quotes, bash may expand `*.log` to file names in the current folder before find runs.",
+      "from_day": 12
+    }
+  ],
+  "problems": [
+    {
+      "id": "d13p01",
+      "title": "Path surgery: ##*/ %/* %.ext, basename, dirname",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 13,
+      "optional": false,
+      "core": true,
+      "workdir": ".",
+      "situation": "A CI job gets the artifact path `/opt/releases/todo-api-2.4.1.tar.gz`. The deploy step needs the file name, the folder, the name without `.tar.gz`, and the version `2.4.1`. Parameter expansion does this inside bash, with no extra programs.",
+      "task": [
+        "Set `ARTIFACT=/opt/releases/todo-api-2.4.1.tar.gz`.",
+        "Print the file name with `${ARTIFACT##*/}` and the folder with `${ARTIFACT%/*}`.",
+        "Print the name without `.tar.gz` with `%.tar.gz`. Then try `%.*` and `%%.*` and compare.",
+        "Get only the version `2.4.1`: remove the prefix `todo-api-` with `#`, then the suffix.",
+        "Do the same file name and folder with `basename` and `dirname`."
+      ],
+      "hints": [
+        "`#` removes from the start, `%` removes from the end. One sign = shortest match, two signs = longest match.",
+        "`##*/` = remove everything up to the last `/`. `%/*` = remove the last `/` and what follows.",
+        "`%.*` removes only `.gz`; `%%.*` removes from the FIRST dot, so it cuts the version too."
+      ],
+      "solution": [
+        "ARTIFACT=/opt/releases/todo-api-2.4.1.tar.gz",
+        "FILE=${ARTIFACT##*/}               # remove the longest match of */ from the start",
+        "echo \"file:     $FILE\"",
+        "echo \"folder:   ${ARTIFACT%/*}\"     # remove the shortest match of /* from the end",
+        "echo \"no ext:   ${FILE%.tar.gz}\"",
+        "echo \"%.*:      ${FILE%.*}\"         # shortest: only .gz removed",
+        "echo \"%%.*:     ${FILE%%.*}\"        # longest: everything from the first dot",
+        "V=${FILE#todo-api-}                 # remove the prefix",
+        "echo \"version:  ${V%.tar.gz}\"       # remove the suffix",
+        "echo \"basename: $(basename \"$ARTIFACT\" .tar.gz)\"",
+        "echo \"dirname:  $(dirname \"$ARTIFACT\")\""
+      ],
+      "explanation": [
+        {
+          "part": "${var#pattern} / ${var##pattern}",
+          "meaning": "Remove the shortest / longest match from the START."
+        },
+        {
+          "part": "${var%pattern} / ${var%%pattern}",
+          "meaning": "Remove the shortest / longest match from the END."
+        },
+        {
+          "part": "${ARTIFACT##*/}",
+          "meaning": "Everything up to the last slash is removed: the file name."
+        },
+        {
+          "part": "${ARTIFACT%/*}",
+          "meaning": "The last slash and the name are removed: the folder."
+        },
+        {
+          "part": "${FILE%%.*}",
+          "meaning": "Longest match of `.*` from the end starts at the first dot: `todo-api-2`. A common bug with versions."
+        },
+        {
+          "part": "basename FILE .tar.gz / dirname",
+          "meaning": "External commands that do the same; `basename` can also remove a suffix."
+        }
+      ],
+      "expected_output": "file:     todo-api-2.4.1.tar.gz\nfolder:   /opt/releases\nno ext:   todo-api-2.4.1\n%.*:      todo-api-2.4.1.tar\n%%.*:     todo-api-2\nversion:  2.4.1\nbasename: todo-api-2.4.1\ndirname:  /opt/releases",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `${FILE%%.*}` to remove the extension of a versioned file: the result is `todo-api-2`, not `todo-api-2.4.1`.",
+        "Putting a space: `${ARTIFACT ##*/}` gives `bad substitution`."
+      ],
+      "checks": [
+        {
+          "run": "ARTIFACT=/a/b; echo ${ARTIFACT ##*/}",
+          "expect": "bad substitution"
+        }
+      ],
+      "interview_say": "I use `${path##*/}` for the file name and `${path%/*}` for the folder. `#` cuts from the start and `%` from the end; doubling the sign makes the match as long as possible.",
+      "try_yourself": "Set `URL=https://github.com/wicky/todo.git` and print only `todo` using two expansions.",
+      "table": {
+        "head": [
+          "Form",
+          "Removes",
+          "Memory trick"
+        ],
+        "rows": [
+          [
+            "`#`",
+            "from the start, shortest",
+            "`#` is left of `$` on the keyboard"
+          ],
+          [
+            "`##`",
+            "from the start, longest",
+            ""
+          ],
+          [
+            "`%`",
+            "from the end, shortest",
+            "`%` is right of `$`"
+          ],
+          [
+            "`%%`",
+            "from the end, longest",
+            ""
+          ]
+        ]
+      }
+    },
+    {
+      "id": "d13p02",
+      "title": "Defaults and checks: :- := :? :+ and ${#var}",
+      "type": "predict",
+      "topic": "Variables",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A container entrypoint reads its settings from environment variables. Some are optional (use a default), one is required (stop if missing), and the database password must be at least 12 characters long.",
+      "task": [
+        "With `PORT` unset, predict and print `${PORT:-8080}`. Is `PORT` set afterwards?",
+        "Now print `${PORT:=8080}`. Is `PORT` set afterwards?",
+        "Set `DEBUG=1` and print `${DEBUG:+--verbose}`. Then unset it and print again.",
+        "Set `DB_PASSWORD=short` and check its length with `${#DB_PASSWORD}`.",
+        "In a subshell, run `echo \"${DB_HOST:?DB_HOST must be set}\"` and read the error."
+      ],
+      "hints": [
+        "`:-` uses a default but does not change the variable. `:=` uses it AND saves it.",
+        "`:+` gives the alternative text only when the variable IS set and not empty.",
+        "`:?` stops with the message when the variable is empty or unset."
+      ],
+      "solution": [
+        "unset PORT",
+        "echo \"port: ${PORT:-8080}, PORT is now: [${PORT}]\"",
+        "echo \"port: ${PORT:=8080}, PORT is now: [${PORT}]\"",
+        "DEBUG=1;  echo \"flags: [${DEBUG:+--verbose}]\"",
+        "unset DEBUG; echo \"flags: [${DEBUG:+--verbose}]\"",
+        "DB_PASSWORD=short",
+        "echo \"password length: ${#DB_PASSWORD}\"",
+        "(( ${#DB_PASSWORD} >= 12 )) || echo \"password too short (need 12+)\"",
+        "( echo \"${DB_HOST:?DB_HOST must be set}\" ) || echo \"exit code: $?\""
+      ],
+      "explanation": [
+        {
+          "part": "${VAR:-default}",
+          "meaning": "Use the default when VAR is unset or empty. VAR does not change."
+        },
+        {
+          "part": "${VAR:=default}",
+          "meaning": "Same, but also assign the default to VAR."
+        },
+        {
+          "part": "${VAR:+text}",
+          "meaning": "Give `text` only if VAR has a value. Good for optional flags."
+        },
+        {
+          "part": "${VAR:?message}",
+          "meaning": "Stop with the message if VAR is unset or empty."
+        },
+        {
+          "part": "${#VAR}",
+          "meaning": "Length of the value in characters."
+        }
+      ],
+      "expected_output": "port: 8080, PORT is now: []\nport: 8080, PORT is now: [8080]\nflags: [--verbose]\nflags: []\npassword length: 5\npassword too short (need 12+)\nbash: DB_HOST: DB_HOST must be set\nexit code: 1",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `${PORT-8080}` (no colon): it uses the default only when PORT is unset, not when it is empty (`PORT=`).",
+        "Using `:=` on a positional parameter: `${1:=x}` gives `$1: cannot assign in this way`."
+      ],
+      "checks": [
+        {
+          "run": "bash -c 'echo ${1:=x}'",
+          "expect": "$1: cannot assign in this way"
+        }
+      ],
+      "interview_say": "In entrypoint scripts I use `${VAR:-default}` for optional settings, `${VAR:?message}` for required ones, and `${#VAR}` to check lengths.",
+      "try_yourself": "Run `bash -c 'echo ${1:=x}'` and read the error. Why can't you assign to `$1`?"
+    },
+    {
+      "id": "d13p03",
+      "title": "Dates for backups and releases",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 13,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "Backup files need sortable names like `db-20261020-1430.sql.gz`, a cleanup job needs the date 7 days ago, and a report needs the number of days between two dates. Here the dates are fixed with `date -d`, so the output is the same on every machine.",
+      "task": [
+        "Print `2026-10-20 14:30` as `%F` (YYYY-MM-DD) and as `%Y%m%d-%H%M`.",
+        "Build the backup name `db-<stamp>.sql.gz` from that time.",
+        "Print the date 7 days before and 30 days after `2026-10-20`.",
+        "Convert the date to seconds since 1970 (`+%s`) in UTC, and back with `@seconds`.",
+        "Compute the days between `2026-10-01` and `2026-10-20`."
+      ],
+      "hints": [
+        "`date -d 'TEXT' +FORMAT` reads a date from text. Without `-d`, it uses now.",
+        "`%F` = `%Y-%m-%d`. `%H%M` = hours and minutes. `%s` = epoch seconds.",
+        "Days between: `(( (end - start) / 86400 ))`, where 86400 = seconds per day."
+      ],
+      "solution": [
+        "T='2026-10-20 14:30'",
+        "date -d \"$T\" +%F",
+        "STAMP=$(date -d \"$T\" +%Y%m%d-%H%M)",
+        "echo \"backup file: db-$STAMP.sql.gz\"",
+        "date -d '2026-10-20 -7 days' +%F",
+        "date -d '2026-10-20 +30 days' +%F",
+        "EPOCH=$(TZ=UTC date -d '2026-10-20 00:00' +%s)",
+        "echo \"epoch: $EPOCH\"",
+        "TZ=UTC date -d \"@$EPOCH\" '+%F %T %Z'",
+        "START=$(TZ=UTC date -d 2026-10-01 +%s)",
+        "END=$(TZ=UTC date -d 2026-10-20 +%s)",
+        "echo \"days between: $(( (END - START) / 86400 ))\""
+      ],
+      "explanation": [
+        {
+          "part": "date -d \"$T\" +%F",
+          "meaning": "Format a given date. `%F` = 2026-10-20 (ISO, sorts correctly)."
+        },
+        {
+          "part": "+%Y%m%d-%H%M",
+          "meaning": "20261020-1430: good for file names (no spaces, no colons)."
+        },
+        {
+          "part": "-d '2026-10-20 -7 days'",
+          "meaning": "Date math with words: `-7 days`, `+30 days`, `yesterday`, `next monday`."
+        },
+        {
+          "part": "+%s / @seconds",
+          "meaning": "Seconds since 1970-01-01 UTC (epoch), and back."
+        },
+        {
+          "part": "TZ=UTC",
+          "meaning": "Use UTC for this command only, so the result does not depend on the machine's time zone."
+        },
+        {
+          "part": "/ 86400",
+          "meaning": "Seconds in a day: 24 × 60 × 60."
+        }
+      ],
+      "expected_output": "2026-10-20\nbackup file: db-20261020-1430.sql.gz\n2026-10-13\n2026-11-19\nepoch: 1792454400\n2026-10-20 00:00:00 UTC\ndays between: 19",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "`date` without `-d` prints the current time, which is different every run. Here every date is fixed.",
+      "verified": true,
+      "mistakes": [
+        "Using `%d-%m-%Y` in file names: `20-10-2026` does not sort by date. Use `%F` or `%Y%m%d`.",
+        "Using `:` in file names (`%T`): Windows tools and some copies fail on colons.",
+        "`date -d` is GNU (Linux). On macOS it is `date -v-7d`. Scripts for both need care."
+      ],
+      "interview_say": "For backup names I use `date +%Y%m%d-%H%M` so files sort by time, `date -d '-7 days' +%F` for cleanup dates, and epoch seconds `+%s` to compute differences.",
+      "try_yourself": "Print today's date in Sri Lanka and in UTC: `TZ=Asia/Colombo date` and `TZ=UTC date`. How many hours apart are they?"
+    },
+    {
+      "id": "d13p04",
+      "title": "Clean reports with printf, and read -p",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 12,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "A status script prints a table of services for the on-call engineer, and an install script asks the user which environment to use. `echo` is fine for simple text; `printf` gives exact columns, padding and numbers.",
+      "task": [
+        "Print a header and 3 rows with `printf '%-14s %6s %8s\\n'` (service, port, status).",
+        "Print a number with leading zeros (`%05d`) and a percent with one decimal (`%.1f%%`).",
+        "Print every item of an array on its own line with `printf '%s\\n' \"${ARR[@]}\"`.",
+        "Ask for the environment with `read -r -p \"Environment: \" ENV`. Here the answer comes from `<<< staging`, so no prompt is shown."
+      ],
+      "hints": [
+        "`%-14s` = text, left aligned, 14 wide. `%6s` = right aligned, 6 wide.",
+        "printf does not add a new line: always end the format with `\\n`.",
+        "`read -p` shows the prompt only when input comes from a keyboard (a terminal)."
+      ],
+      "solution": [
+        "printf '%-14s %6s %8s\\n' SERVICE PORT STATUS",
+        "printf '%-14s %6d %8s\\n' todo-frontend 80 up todo-backend 8080 up postgres 5432 down",
+        "printf 'build: %05d\\n' 42",
+        "printf 'cpu: %.1f%%\\n' 87.456",
+        "ARR=(web-01 web-02 \"db 01\")",
+        "printf '%s\\n' \"${ARR[@]}\"",
+        "read -r -p \"Environment: \" ENV <<< \"staging\"",
+        "echo \"you chose: $ENV\""
+      ],
+      "explanation": [
+        {
+          "part": "printf FORMAT args",
+          "meaning": "The format is reused for extra arguments: 3 rows from one format."
+        },
+        {
+          "part": "%-14s / %6d",
+          "meaning": "Left-aligned text in 14 columns / number right-aligned in 6."
+        },
+        {
+          "part": "%05d",
+          "meaning": "Pad with zeros to 5 digits: 00042."
+        },
+        {
+          "part": "%.1f%%",
+          "meaning": "One decimal, then a real `%` (written `%%`)."
+        },
+        {
+          "part": "read -r -p \"text\" VAR",
+          "meaning": "Show a prompt, read a line into VAR. Add `-s` to hide typing (passwords)."
+        }
+      ],
+      "expected_output": "SERVICE          PORT   STATUS\ntodo-frontend      80       up\ntodo-backend     8080       up\npostgres         5432     down\nbuild: 00042\ncpu: 87.5%\nweb-01\nweb-02\ndb 01\nyou chose: staging",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Forgetting `\\n`: all output is on one line, and the prompt appears at the end.",
+        "Using `printf \"$TEXT\"` with user text: a `%` in the text breaks the output. Use `printf '%s\\n' \"$TEXT\"`.",
+        "Asking for input in a CI job: there is no keyboard, so `read` gets nothing. Use arguments or environment variables there."
+      ],
+      "interview_say": "I use `printf` for aligned tables and exact number formats, and always `printf '%s\\n' \"$var\"` for user text. In CI there is no keyboard, so scripts take options, not `read`.",
+      "try_yourself": "Run `read -r -s -p \"Password: \" PW; echo; echo \"length: ${#PW}\"` in your terminal. The typing is hidden."
+    },
+    {
+      "id": "d13p05",
+      "title": "Find the bug: the release name script",
+      "type": "fix-bug",
+      "topic": "Variables",
+      "minutes": 14,
+      "optional": false,
+      "core": false,
+      "workdir": ".",
+      "situation": "`release-name.sh` prints the release name, tag, date and a work folder for the CI job. The output is wrong in three places, and the second run of the job fails. The goal is in the comments.",
+      "task": [
+        "Run `bash release-name.sh /opt/releases/todo-api-2.4.1.tar.gz 2026-10-20` twice. Compare with the comments.",
+        "Find 4 bugs: the extension removal, the dot replacement, the date format, and the work folder.",
+        "Fix them. The work folder must be new and unique each run: use `mktemp -d`.",
+        "Run the fixed script twice."
+      ],
+      "hints": [
+        "`%.*` removes only `.gz`. Remove `.tar.gz` exactly.",
+        "`${VERSION/./-}` replaces only the first dot. `//` replaces all.",
+        "`%F` gives YYYY-MM-DD. `mktemp -d` makes a new folder with a random name and prints its path."
+      ],
+      "solution": [
+        "bash release-name.sh /opt/releases/todo-api-2.4.1.tar.gz 2026-10-20",
+        "bash release-name.sh /opt/releases/todo-api-2.4.1.tar.gz 2026-10-20",
+        "echo \"--- fixed ---\"",
+        "cat > release-name.sh <<'EOF'",
+        "#!/bin/bash",
+        "# Usage: release-name.sh <archive-path> <build-date>",
+        "FILE=${1##*/}",
+        "NAME=${FILE%.tar.gz}                 # remove the exact extension",
+        "VERSION=${NAME#todo-api-}",
+        "TAG=${VERSION//./-}                  # // = replace every dot",
+        "BUILD_DATE=$(date -d \"$2\" +%F)       # YYYY-MM-DD",
+        "WORKDIR=$(mktemp -d)                 # new, unique folder every run",
+        "echo \"name:    $NAME\"",
+        "echo \"tag:     $TAG\"",
+        "echo \"date:    $BUILD_DATE\"",
+        "[ -d \"$WORKDIR\" ] && echo \"workdir: created (a new folder under /tmp)\"",
+        "rmdir \"$WORKDIR\"                     # clean up our empty folder",
+        "EOF",
+        "bash release-name.sh /opt/releases/todo-api-2.4.1.tar.gz 2026-10-20",
+        "bash release-name.sh /opt/releases/todo-api-2.4.1.tar.gz 2026-10-20"
+      ],
+      "explanation": [
+        {
+          "part": "${FILE%.tar.gz}",
+          "meaning": "Bug 1: `%.*` removed only `.gz` and left `todo-api-2.4.1.tar`."
+        },
+        {
+          "part": "${VERSION//./-}",
+          "meaning": "Bug 2: one `/` replaces the first match; `//` replaces all."
+        },
+        {
+          "part": "+%F",
+          "meaning": "Bug 3: `%d-%m-%Y` gave `20-10-2026`."
+        },
+        {
+          "part": "mktemp -d",
+          "meaning": "Bug 4: a fixed folder name made the second run fail with `File exists`. mktemp makes a new unique folder."
+        }
+      ],
+      "expected_output": "name:    todo-api-2.4.1.tar\ntag:     2-4.1.tar\ndate:    20-10-2026\nworkdir: release-work\nmkdir: cannot create directory ‘release-work’: File exists\nname:    todo-api-2.4.1.tar\ntag:     2-4.1.tar\ndate:    20-10-2026\nworkdir: release-work\n--- fixed ---\nname:    todo-api-2.4.1\ntag:     2-4-1\ndate:    2026-10-20\nworkdir: created (a new folder under /tmp)\nname:    todo-api-2.4.1\ntag:     2-4-1\ndate:    2026-10-20\nworkdir: created (a new folder under /tmp)",
+      "expect_exit": 0,
+      "output_check": true,
+      "output_note": "The broken script creates a folder `release-work` in day13. The user can delete it with `rmdir release-work`.",
+      "verified": true,
+      "mistakes": [
+        "Fixing bug 4 with `mkdir -p`: the second run then reuses the old folder with old files inside. CI jobs need a clean folder.",
+        "Printing the mktemp path in a test that compares output: the random name changes every run."
+      ],
+      "checks": [
+        {
+          "run": "bash release-name.sh /opt/releases/todo-api-2.4.1.tar.gz 2026-10-20; bash release-name.sh /opt/releases/todo-api-2.4.1.tar.gz 2026-10-20",
+          "expect": "File exists"
+        }
+      ],
+      "interview_say": "I remove known extensions exactly with `%`, replace all matches with `//`, use ISO dates with `%F`, and create work folders with `mktemp -d` so every run starts clean.",
+      "try_yourself": "Add a line that prints the tag in upper case with `${TAG^^}` and the first 3 letters of the name with `${NAME:0:3}`."
+    },
+    {
+      "id": "d13p06",
+      "title": "Safe temp files: mktemp and cleanup",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "A script downloads a file, edits it, and moves it into place. Using a fixed name like `/tmp/data.json` is dangerous: two runs clash, and other users may read or replace it. `mktemp` makes a unique, private file.",
+      "task": [
+        "Create a temp file with `TMP=$(mktemp)` and check its permissions with `stat -c '%a'`.",
+        "Create a temp file with a name pattern: `mktemp /tmp/todo-backup.XXXXXX`.",
+        "Write to the file, read it, and remove it at the end.",
+        "Use `trap 'rm -f \"$TMP\"' EXIT` in a small `bash -c` script, and show that the file is gone after the script ends."
+      ],
+      "hints": [
+        "`mktemp` creates the file with permission 600 (only the owner).",
+        "`XXXXXX` in the pattern is replaced by random characters.",
+        "`trap ... EXIT` runs when the script ends, even after an error (Day 22)."
+      ],
+      "solution": [
+        "TMP=$(mktemp)",
+        "echo \"permission: $(stat -c %a \"$TMP\")\"",
+        "NAMED=$(mktemp /tmp/todo-backup.XXXXXX)",
+        "[[ $NAMED == /tmp/todo-backup.?????? ]] && echo \"named temp file created\"",
+        "echo '{\"ok\": true}' > \"$TMP\"",
+        "cat \"$TMP\"",
+        "rm -f \"$TMP\" \"$NAMED\"",
+        "LEFT=$(bash -c 'T=$(mktemp); trap \"rm -f \\\"$T\\\"\" EXIT; echo data > \"$T\"; echo \"$T\"')",
+        "[ -e \"$LEFT\" ] && echo \"file still there\" || echo \"trap removed the temp file\""
+      ],
+      "explanation": [
+        {
+          "part": "mktemp",
+          "meaning": "Make a new empty file with a unique name under /tmp, permission 600. Prints the path."
+        },
+        {
+          "part": "XXXXXX",
+          "meaning": "Replaced by random letters and digits."
+        },
+        {
+          "part": "trap '...' EXIT",
+          "meaning": "Run cleanup when the script exits, success or error."
+        },
+        {
+          "part": "?????? (in [[ ]])",
+          "meaning": "A pattern: exactly 6 characters. The real name is random, so the test checks only the shape."
+        }
+      ],
+      "expected_output": "permission: 600\nnamed temp file created\n{\"ok\": true}\ntrap removed the temp file",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Writing `TMP=/tmp/data.$$`: the name is guessable, so another user could create it first.",
+        "Forgetting cleanup: `/tmp` fills with old files from every run."
+      ],
+      "interview_say": "I create temp files with `mktemp`, which gives a unique private file, and remove them with `trap 'rm -f \"$TMP\"' EXIT` so they are cleaned even when the script fails.",
+      "try_yourself": "Run `mktemp -d` twice and compare the two names."
+    },
+    {
+      "id": "d13p07",
+      "title": "More string tricks: case, substrings, replace",
+      "type": "command",
+      "topic": "Variables",
+      "minutes": 10,
+      "optional": true,
+      "core": false,
+      "workdir": ".",
+      "situation": "Small string jobs come up all the time in pipelines: a short git SHA for an image tag, an environment name in upper or lower case, removing spaces from a branch name, and replacing a word.",
+      "task": [
+        "From `SHA=a3f9c1e7d2b4c5f6`, print the first 7 characters with `${SHA:0:7}`.",
+        "Print `ENV=Staging` in upper case `${ENV^^}` and lower case `${ENV,,}`.",
+        "Turn `feature/Add login page` into a Docker-safe tag: lower case, `/` and spaces replaced by `-`.",
+        "Replace `http://` with `https://` in a URL using `${URL/http:/https:}`."
+      ],
+      "hints": [
+        "`${var:offset:length}` = substring.",
+        "`^^` = all upper case, `,,` = all lower case (bash 4+).",
+        "`${B//[\\/ ]/-}` replaces every `/` or space with `-`."
+      ],
+      "solution": [
+        "SHA=a3f9c1e7d2b4c5f6",
+        "echo \"short sha: ${SHA:0:7}\"",
+        "ENV=Staging",
+        "echo \"${ENV^^} ${ENV,,}\"",
+        "BRANCH=\"feature/Add login page\"",
+        "TAG=${BRANCH,,}",
+        "TAG=${TAG//[\\/ ]/-}",
+        "echo \"image tag: todo-api:$TAG\"",
+        "URL=http://todo.example.com/api",
+        "echo \"${URL/http:/https:}\""
+      ],
+      "explanation": [
+        {
+          "part": "${SHA:0:7}",
+          "meaning": "7 characters starting at position 0."
+        },
+        {
+          "part": "${ENV^^} / ${ENV,,}",
+          "meaning": "Upper / lower case."
+        },
+        {
+          "part": "${TAG//[\\/ ]/-}",
+          "meaning": "Replace every character that is `/` or a space with `-`."
+        },
+        {
+          "part": "${URL/a/b}",
+          "meaning": "Replace the first match of `a` with `b`."
+        }
+      ],
+      "expected_output": "short sha: a3f9c1e\nSTAGING staging\nimage tag: todo-api:feature-add-login-page\nhttps://todo.example.com/api",
+      "expect_exit": 0,
+      "output_check": true,
+      "verified": true,
+      "mistakes": [
+        "Using `^^` in `sh` or very old bash (macOS bash 3.2): `bad substitution`. Use `tr 'a-z' 'A-Z'` there.",
+        "Docker tags cannot contain `/` or spaces or upper case letters: `invalid reference format`."
+      ],
+      "interview_say": "For image tags I use `${SHA:0:7}` for a short commit id and clean branch names with `${b,,}` and `${b//\\//-}`, all inside bash without extra tools.",
+      "try_yourself": "Remove all digits from `todo-api-2.4.1` with `${NAME//[0-9]/}`. What is left?"
+    }
+  ],
+  "interview": [
+    {
+      "q": "How do you get the file name from a full path in bash, without basename?",
+      "a": "`${path##*/}`. And the folder: `${path%/*}`.",
+      "topic": "Variables"
+    },
+    {
+      "q": "What is the difference between `${VAR:-x}` and `${VAR:=x}`?",
+      "a": "Both give `x` when VAR is empty or unset. `:=` also saves `x` into VAR; `:-` does not change VAR.",
+      "topic": "Variables"
+    },
+    {
+      "q": "How do you create a timestamped backup file name?",
+      "a": "`backup-$(date +%Y%m%d-%H%M%S).tar.gz`. This format sorts by time.",
+      "topic": "Variables"
+    },
+    {
+      "q": "How do you get the date 7 days ago in a script?",
+      "a": "`date -d '7 days ago' +%F` (GNU date on Linux).",
+      "topic": "Variables"
+    },
+    {
+      "q": "Why use `mktemp` instead of a fixed temp file name?",
+      "a": "mktemp makes a unique file with permission 600. Fixed names clash between runs and can be attacked by other users.",
+      "topic": "Variables"
+    }
+  ],
+  "recap": [
+    {
+      "cmd": "${p##*/}",
+      "meaning": "File name from a path",
+      "example": "echo \"${ARTIFACT##*/}\"",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${p%/*}",
+      "meaning": "Folder from a path",
+      "example": "echo \"${ARTIFACT%/*}\"",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${v#pre} / ${v%suf}",
+      "meaning": "Remove a prefix / suffix",
+      "example": "${FILE%.tar.gz}",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${v/a/b} / ${v//a/b}",
+      "meaning": "Replace first / all matches",
+      "example": "${VERSION//./-}",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${v:-x} / ${v:=x}",
+      "meaning": "Default / default and assign",
+      "example": "PORT=${PORT:-8080}",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${v:?msg} / ${v:+x}",
+      "meaning": "Required / text only if set",
+      "example": "${DB_HOST:?DB_HOST missing}",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${#v}",
+      "meaning": "Length of a string",
+      "example": "(( ${#PW} >= 12 ))",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "${v:0:7} / ${v^^} / ${v,,}",
+      "meaning": "Substring / upper / lower case",
+      "example": "${SHA:0:7}",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "basename / dirname",
+      "meaning": "File name / folder of a path",
+      "example": "basename \"$f\" .tar.gz",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "date +%F",
+      "meaning": "Today as YYYY-MM-DD",
+      "example": "date +%F",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "date +%Y%m%d-%H%M%S",
+      "meaning": "Sortable timestamp for file names",
+      "example": "tar czf bk-$(date +%Y%m%d-%H%M).tgz app",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "date -d '7 days ago'",
+      "meaning": "Date math (GNU)",
+      "example": "date -d '2026-10-20 -7 days' +%F",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "printf '%-10s %5d\\n'",
+      "meaning": "Aligned columns",
+      "example": "printf '%-12s %6s\\n' SERVICE PORT",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "read -r -p",
+      "meaning": "Ask the user for a value",
+      "example": "read -r -p \"Env: \" ENV",
+      "topic": "Variables"
+    },
+    {
+      "cmd": "mktemp / mktemp -d",
+      "meaning": "Unique private temp file / folder",
+      "example": "TMP=$(mktemp)",
+      "topic": "Variables"
+    }
+  ],
+  "coverage": [
+    {
+      "item": "${var:-x}, ${var:=x}",
+      "problems": [
+        "d13p02"
+      ]
+    },
+    {
+      "item": "${#var}",
+      "problems": [
+        "d13p02"
+      ]
+    },
+    {
+      "item": "${var%pattern}",
+      "problems": [
+        "d13p01",
+        "d13p05"
+      ]
+    },
+    {
+      "item": "${var##*/}",
+      "problems": [
+        "d13p01",
+        "d13p05"
+      ]
+    },
+    {
+      "item": "${var/a/b}",
+      "problems": [
+        "d13p05",
+        "d13p07"
+      ]
+    },
+    {
+      "item": "basename, dirname",
+      "problems": [
+        "d13p01"
+      ]
+    },
+    {
+      "item": "date +%F, date -d",
+      "problems": [
+        "d13p03",
+        "d13p05"
+      ]
+    },
+    {
+      "item": "printf",
+      "problems": [
+        "d13p04"
+      ]
+    },
+    {
+      "item": "read -p",
+      "problems": [
+        "d13p04"
+      ]
+    },
+    {
+      "item": "mktemp",
+      "problems": [
+        "d13p05",
+        "d13p06"
+      ]
+    }
+  ],
+  "reset": "rm -rf ~/bash-practice/day13"
+}
